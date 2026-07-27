@@ -93,3 +93,40 @@ func (a *app) setOverlayStatus(active bool, _ string) {
 
 func printRegionJSON(r Region) error                   { return json.NewEncoder(os.Stdout).Encode(r) }
 func printOverlayPositionJSON(p OverlayPosition) error { return json.NewEncoder(os.Stdout).Encode(p) }
+
+// overlayPositionInsideWorkArea keeps the recording indicator inside the
+// usable monitor area, so it cannot cover the taskbar, notification area or
+// clock. Work-area coordinates are absolute virtual-screen coordinates.
+func overlayPositionInsideWorkArea(x, y, width, height, left, top, right, bottom, margin int) (int, int) {
+	if width < 1 || height < 1 || right <= left || bottom <= top {
+		return x, y
+	}
+	if margin < 0 {
+		margin = 0
+	}
+	minX := left + margin
+	minY := top + margin
+	maxX := right - width - margin
+	maxY := bottom - height - margin
+	if maxX < minX {
+		minX = left
+		maxX = right - width
+	}
+	if maxY < minY {
+		minY = top
+		maxY = bottom - height
+	}
+	if x < minX {
+		x = minX
+	}
+	if x > maxX {
+		x = maxX
+	}
+	if y < minY {
+		y = minY
+	}
+	if y > maxY {
+		y = maxY
+	}
+	return x, y
+}

@@ -18,7 +18,7 @@ import (
 
 const (
 	productName = "LinkVideo Monitor"
-	version     = "0.7.1"
+	version     = "0.7.6"
 )
 
 //go:embed payload.zip
@@ -174,8 +174,8 @@ func extractPayload(dest string) error {
 		if closeErr != nil {
 			return closeErr
 		}
-		_ = os.Remove(target)
-		if err := os.Rename(tmp, target); err != nil {
+		if err := replaceInstalledFile(tmp, target); err != nil {
+			_ = os.Remove(tmp)
 			return fmt.Errorf("не удалось заменить %s: %w", filepath.Base(target), err)
 		}
 	}
@@ -375,8 +375,33 @@ func copyFile(src, dst string) error {
 		_ = os.Remove(tmp)
 		return closeErr
 	}
-	_ = os.Remove(dst)
-	return os.Rename(tmp, dst)
+	if err := replaceInstalledFile(tmp, dst); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+func replaceInstalledFile(tempPath, targetPath string) error {
+	tempPtr, err := syscall.UTF16PtrFromString(tempPath)
+	if err != nil {
+		return err
+	}
+	targetPtr, err := syscall.UTF16PtrFromString(targetPath)
+	if err != nil {
+		return err
+	}
+	const moveFileReplaceExisting = 0x00000001
+	const moveFileWriteThrough = 0x00000008
+	ok, _, callErr := kernel32Installer.NewProc("MoveFileExW").Call(
+		uintptr(unsafe.Pointer(tempPtr)),
+		uintptr(unsafe.Pointer(targetPtr)),
+		moveFileReplaceExisting|moveFileWriteThrough,
+	)
+	if ok == 0 {
+		return fmt.Errorf("MoveFileExW: %w", callErr)
+	}
+	return nil
 }
 
 func runHidden(name string, args ...string) error {

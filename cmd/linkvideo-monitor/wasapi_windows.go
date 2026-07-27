@@ -304,7 +304,7 @@ func runWASAPILoopback(out io.Writer) error {
 		}
 		copy(chunk, queue[:n])
 		queue = queue[n:]
-		if _, writeErr := out.Write(chunk); writeErr != nil {
+		if writeErr := writeFull(out, chunk); writeErr != nil {
 			if writeErr == syscall.ERROR_BROKEN_PIPE {
 				return nil
 			}

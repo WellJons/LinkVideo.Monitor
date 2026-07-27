@@ -1,4 +1,4 @@
-# Сборка LinkVideo Monitor 0.7.1 Beta
+# Сборка LinkVideo Monitor 0.7.6 Beta
 
 ## Требования
 
@@ -22,7 +22,7 @@ scripts\windows\build-release.cmd
 2. собирает `build\LinkVideo.Monitor.exe`;
 3. добавляет оригинальную иконку;
 4. формирует временный `installer\payload.zip`;
-5. собирает однофайловый `build\LinkVideo.Monitor_0.7.1_Setup.exe`;
+5. собирает однофайловый `build\LinkVideo.Monitor_0.7.6_Setup.exe`;
 6. удаляет временный payload.
 
 ## Только приложение

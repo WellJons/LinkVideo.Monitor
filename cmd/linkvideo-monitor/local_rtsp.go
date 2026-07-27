@@ -166,8 +166,7 @@ func downloadMediaMTX(dest string) error {
 		_ = os.Remove(tmpDest)
 		return closeErr
 	}
-	_ = os.Remove(dest)
-	if err := os.Rename(tmpDest, dest); err != nil {
+	if err := replaceFileAtomically(tmpDest, dest); err != nil {
 		_ = os.Remove(tmpDest)
 		return err
 	}

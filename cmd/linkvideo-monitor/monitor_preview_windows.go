@@ -79,8 +79,7 @@ func captureMonitorPNG(index int) ([]byte, error) {
 	}
 
 	const srccopy = 0x00CC0020
-	const captureblt = 0x40000000
-	ok, _, _ := procBitBlt.Call(memDC, 0, 0, uintptr(w), uintptr(h), screenDC, uintptr(int64(m.X)), uintptr(int64(m.Y)), srccopy|captureblt)
+	ok, _, _ := procBitBlt.Call(memDC, 0, 0, uintptr(w), uintptr(h), screenDC, uintptr(int64(m.X)), uintptr(int64(m.Y)), srccopy)
 	// GetDIBits не должен читать bitmap, пока тот выбран в DC. В 0.4 это
 	// нарушалось, из-за чего браузер получал ошибку вместо PNG.
 	_, _, _ = procSelectObject.Call(memDC, old)

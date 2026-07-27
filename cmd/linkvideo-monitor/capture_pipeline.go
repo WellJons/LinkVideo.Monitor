@@ -26,14 +26,19 @@ type captureSupervisor struct {
 	plan     capturePlan
 	frameLen int
 
-	mu           sync.RWMutex
-	latest       []byte
-	scratch      []byte
-	hasFrame     bool
-	backend      string
-	privacy      privacyTracker
-	secure       secureDesktopBridge
-	secureActive bool
+	mu             sync.RWMutex
+	latest         []byte
+	scratch        []byte
+	hasFrame       bool
+	backend        string
+	privacy        privacyTracker
+	secure         secureDesktopBridge
+	secureActive   bool
+	secureHasFrame bool
+	session        sessionStateWatcher
+	sessionLocked  bool
+	lockedFrame    []byte
+	protectedFrame []byte
 }
 
 func newCaptureSupervisor(a *app, cfg Config, plan capturePlan) *captureSupervisor {
@@ -41,6 +46,9 @@ func newCaptureSupervisor(a *app, cfg Config, plan capturePlan) *captureSupervis
 	s := &captureSupervisor{
 		app: a, cfg: cfg, plan: plan, frameLen: frameLen,
 		latest: make([]byte, frameLen), scratch: make([]byte, frameLen),
+		session:        newSessionStateWatcher(),
+		lockedFrame:    makeSessionLockedFrame(plan.OutputWidth, plan.OutputHeight),
+		protectedFrame: makeProtectedDesktopFrame(plan.OutputWidth, plan.OutputHeight),
 	}
 	if cfg.PrivacyProtection {
 		s.privacy = newPrivacyTracker()
@@ -110,6 +118,9 @@ func (s *captureSupervisor) setBackend(backend string) {
 // frame stays in memory and the producer is replaced by the GDI fallback. The
 // FFmpeg encoder and RTSP connection are not restarted.
 func (s *captureSupervisor) run(ctx context.Context) {
+	if s.session != nil {
+		go s.session.Run(ctx, s.handleSessionState)
+	}
 	if s.privacy != nil {
 		go s.privacy.Run(ctx)
 		s.app.appendLog("Защита конфиденциальных полей включена")
@@ -280,36 +291,77 @@ func (s *captureSupervisor) writeFrames(ctx context.Context, w io.WriteCloser) e
 	ticker := time.NewTicker(period)
 	defer ticker.Stop()
 
+	// Never hold the supervisor lock while writing a large raw frame to FFmpeg.
+	// A blocked pipe must not delay a Windows LOCK event or secure-desktop frame:
+	// otherwise one old desktop frame could be emitted when the pipe recovers.
+	output := make([]byte, s.frameLen)
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
 			s.mu.RLock()
-			err := writeFull(w, s.latest)
+			frame := selectOutputFrame(
+				s.latest, s.lockedFrame, s.protectedFrame,
+				s.sessionLocked, s.secureActive, s.secureHasFrame,
+			)
+			copy(output, frame)
 			s.mu.RUnlock()
-			if err != nil {
+			if err := writeFull(w, output); err != nil {
 				return err
 			}
 		}
 	}
 }
 
+func selectOutputFrame(latest, lockedFrame, protectedFrame []byte, sessionLocked, secureActive, secureHasFrame bool) []byte {
+	if sessionLocked {
+		// Prefer the real Winlogon/Windows lock screen captured by the service.
+		// The branded frame is only a safe fallback while that protected frame
+		// is unavailable. Never return an old unlocked desktop in this state.
+		if secureActive && secureHasFrame {
+			return latest
+		}
+		return lockedFrame
+	}
+	if secureActive && !secureHasFrame {
+		return protectedFrame
+	}
+	return latest
+}
+
 func (s *captureSupervisor) handleSecureFrame(frame []byte, active bool) {
 	s.mu.Lock()
 	changed := s.secureActive != active
 	s.secureActive = active
+	s.secureHasFrame = false
 	if active && len(frame) >= s.frameLen {
 		copy(s.latest, frame[:s.frameLen])
 		s.hasFrame = true
+		s.secureHasFrame = true
 	}
 	s.mu.Unlock()
 	if changed {
 		if active {
-			s.app.appendLog("Захват переключён на защищённый рабочий стол UAC")
+			s.app.appendLog("Захват переключён на защищённый рабочий стол Windows")
 		} else {
 			s.app.appendLog("Захват возвращён на рабочий стол пользователя")
 		}
+	}
+}
+
+func (s *captureSupervisor) handleSessionState(locked bool) {
+	s.mu.Lock()
+	changed := s.sessionLocked != locked
+	s.sessionLocked = locked
+	s.mu.Unlock()
+	if !changed {
+		return
+	}
+	if locked {
+		s.app.appendLog("Сеанс Windows заблокирован; старый кадр скрыт, ожидается экран Winlogon")
+	} else {
+		s.app.appendLog("Сеанс Windows разблокирован; обычный захват восстановлен")
 	}
 }
 

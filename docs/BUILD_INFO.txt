@@ -1,4 +1,4 @@
-LinkVideo Monitor 0.7.1 Beta
+LinkVideo Monitor 0.7.6 Beta
 
 Windows amd64, GOAMD64=v1
 Main executable includes capture, UAC service, secure desktop helper, overlay and WASAPI modes.

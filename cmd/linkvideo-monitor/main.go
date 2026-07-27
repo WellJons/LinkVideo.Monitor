@@ -24,7 +24,7 @@ import (
 
 const (
 	appName    = "LinkVideo Monitor"
-	appVersion = "0.7.1-beta"
+	appVersion = "0.7.6-beta"
 	listenAddr = "127.0.0.1:8098"
 )
 
@@ -188,6 +188,7 @@ type app struct {
 	remoteSyncing           bool
 	remoteLastSyncAt        time.Time
 	remoteLastError         string
+	configLoadError         bool
 }
 
 func defaultConfig() Config {
@@ -251,9 +252,15 @@ func appDataPaths() (string, string, string) {
 func newApp() *app {
 	cfgPath, logsDir, logPath := appDataPaths()
 	a := &app{cfg: defaultConfig(), cfgPath: cfgPath, logsDir: logsDir, logPath: logPath, lastExitCode: -1, remoteWake: make(chan struct{}, 1), encoderFailures: make(map[string]encoderFailureState)}
-	_ = migrateLegacyConfig(cfgPath)
-	_ = a.loadConfig()
 	a.cleanupOldLogs()
+	if err := migrateLegacyConfig(cfgPath); err != nil {
+		a.appendLog("Не удалось перенести настройки предыдущей версии: " + err.Error())
+	}
+	if err := a.loadConfig(); err != nil {
+		a.configLoadError = true
+		a.lastError = "Не удалось загрузить настройки: " + err.Error()
+		a.appendLog(a.lastError + "; автозапуск потока отключён до успешного сохранения")
+	}
 	return a
 }
 
@@ -479,14 +486,53 @@ func normalizeConfig(c *Config) {
 }
 
 func (a *app) saveConfigLocked() error {
-	if err := os.MkdirAll(filepath.Dir(a.cfgPath), 0755); err != nil {
+	dir := filepath.Dir(a.cfgPath)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	b, err := json.MarshalIndent(a.cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(a.cfgPath, b, 0644)
+	tmp, err := os.CreateTemp(dir, "config-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := writeFull(tmp, b); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := replaceFileAtomically(tmpPath, a.cfgPath); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (a *app) failStart(gen int64, err error) bool {
+	a.mu.Lock()
+	if a.generation != gen {
+		a.mu.Unlock()
+		return false
+	}
+	a.desired = false
+	a.lastError = err.Error()
+	a.mu.Unlock()
+	setSleepPrevention(false, false)
+	a.setOverlayStatus(false, "Запись экрана не ведётся")
+	return true
 }
 
 func (a *app) start() error {
@@ -495,10 +541,18 @@ func (a *app) start() error {
 		a.mu.Unlock()
 		return nil
 	}
+	if a.configLoadError {
+		err := errors.New("настройки не загружены; откройте интерфейс и сохраните их повторно")
+		a.lastError = err.Error()
+		a.mu.Unlock()
+		return err
+	}
+	previousConfig := a.cfg
 	cfg := a.cfg
 	normalizeConfig(&cfg)
 	a.cfg = cfg
 	if err := a.saveConfigLocked(); err != nil {
+		a.cfg = previousConfig
 		a.mu.Unlock()
 		return err
 	}
@@ -515,22 +569,12 @@ func (a *app) start() error {
 	a.setOverlayStatus(false, "Подключение…")
 
 	if _, _, err := buildFFmpeg(cfg); err != nil {
-		a.mu.Lock()
-		a.desired = false
-		a.lastError = err.Error()
-		a.mu.Unlock()
-		setSleepPrevention(false, false)
-		a.setOverlayStatus(false, "Запись экрана не ведётся")
+		a.failStart(gen, err)
 		return err
 	}
 	if cfg.OutputMode == "local" {
 		if err := a.ensureMediaMTX(cfg); err != nil {
-			a.mu.Lock()
-			a.desired = false
-			a.lastError = err.Error()
-			a.mu.Unlock()
-			setSleepPrevention(false, false)
-			a.setOverlayStatus(false, "Запись экрана не ведётся")
+			a.failStart(gen, err)
 			return err
 		}
 	}
@@ -626,23 +670,23 @@ func (a *app) runLoop(gen int64) {
 
 		if cfg.OutputMode == "local" {
 			if err := a.ensureMediaMTX(cfg); err != nil {
-				a.mu.Lock()
-				a.lastError = err.Error()
-				a.desired = false
-				a.mu.Unlock()
-				a.appendLog("ERROR: " + err.Error())
-				setSleepPrevention(false, false)
-				a.setOverlayStatus(false, "")
+				a.recordLaunchError(gen, err)
 				return
 			}
 		}
 
 		plan, err := resolveCapturePlan(cfg)
 		if err != nil {
-			a.recordLaunchError(err)
+			a.recordLaunchError(gen, err)
 			return
 		}
 		encoder := a.selectVideoEncoder(cfg, plan)
+		a.mu.Lock()
+		currentGeneration := a.desired && a.generation == gen
+		a.mu.Unlock()
+		if !currentGeneration {
+			return
+		}
 
 		streamCtx, cancelStream := context.WithCancel(context.Background())
 		var audioBridge *systemAudioBridge
@@ -651,7 +695,7 @@ func (a *app) runLoop(gen int64) {
 			audioBridge, audioURL, err = startSystemAudioBridge(streamCtx, a)
 			if err != nil {
 				cancelStream()
-				a.recordLaunchError(err)
+				a.recordLaunchError(gen, err)
 				return
 			}
 		}
@@ -662,7 +706,7 @@ func (a *app) runLoop(gen int64) {
 				audioBridge.Close()
 			}
 			cancelStream()
-			a.recordLaunchError(err)
+			a.recordLaunchError(gen, err)
 			return
 		}
 
@@ -673,7 +717,7 @@ func (a *app) runLoop(gen int64) {
 				audioBridge.Close()
 			}
 			cancelStream()
-			a.recordLaunchError(err)
+			a.recordLaunchError(gen, err)
 			return
 		}
 		stderr, err := cmd.StderrPipe()
@@ -682,7 +726,7 @@ func (a *app) runLoop(gen int64) {
 				audioBridge.Close()
 			}
 			cancelStream()
-			a.recordLaunchError(err)
+			a.recordLaunchError(gen, err)
 			return
 		}
 		stdout, err := cmd.StdoutPipe()
@@ -691,7 +735,7 @@ func (a *app) runLoop(gen int64) {
 				audioBridge.Close()
 			}
 			cancelStream()
-			a.recordLaunchError(err)
+			a.recordLaunchError(gen, err)
 			return
 		}
 		hideChildWindow(cmd)
@@ -708,7 +752,7 @@ func (a *app) runLoop(gen int64) {
 				audioBridge.Close()
 			}
 			cancelStream()
-			a.recordLaunchError(err)
+			a.recordLaunchError(gen, err)
 			return
 		}
 		lowerProcessPriority(cmd.Process.Pid)
@@ -767,11 +811,18 @@ func (a *app) runLoop(gen int64) {
 			exitCode = cmd.ProcessState.ExitCode()
 		}
 		a.mu.Lock()
+		// A previous FFmpeg process may finish after a manual/remote restart has
+		// already installed a newer process in app state. Never let the stale
+		// generation erase the PID/Running/cmd fields of that new stream.
+		if a.generation != gen || a.cmd != cmd {
+			a.mu.Unlock()
+			return
+		}
 		a.running = false
 		a.pid = 0
 		a.cmd = nil
 		a.lastExitCode = exitCode
-		stillDesired := a.desired && a.generation == gen
+		stillDesired := a.desired
 		delay := time.Duration(a.cfg.RestartDelayS) * time.Second
 		reason := a.fatalCaptureReason
 		encoderFailed := a.encoderFailureDetected && encoder != "libx264"
@@ -831,8 +882,14 @@ func (a *app) scanPipe(prefix string, r io.Reader) {
 	}
 }
 
-func (a *app) recordLaunchError(err error) {
+func (a *app) recordLaunchError(gen int64, err error) {
 	a.mu.Lock()
+	// Ignore a launch error produced by an obsolete restart generation. Without
+	// this guard an old goroutine can stop a newer, already running stream.
+	if a.generation != gen || !a.desired {
+		a.mu.Unlock()
+		return
+	}
 	a.running = false
 	a.desired = false
 	a.lastError = err.Error()
@@ -1564,6 +1621,7 @@ func (a *app) routes() http.Handler {
 			return
 		}
 		a.mu.Lock()
+		previousConfig := a.cfg
 		// Внутренние параметры отсутствуют в веб-форме и должны сохраняться.
 		cfg.DefaultsRevision = a.cfg.DefaultsRevision
 		cfg.CaptureBackend = a.cfg.CaptureBackend
@@ -1577,6 +1635,11 @@ func (a *app) routes() http.Handler {
 		normalizeConfig(&cfg)
 		a.cfg = cfg
 		err := a.saveConfigLocked()
+		if err != nil {
+			a.cfg = previousConfig
+		} else {
+			a.configLoadError = false
+		}
 		a.mu.Unlock()
 		if err != nil {
 			writeJSON(w, 500, map[string]string{"error": err.Error()})
@@ -1621,9 +1684,15 @@ func (a *app) routes() http.Handler {
 			return
 		}
 		a.mu.Lock()
+		previousConfig := a.cfg
 		a.cfg.Link = strings.TrimSpace(body.Link)
 		a.cfg.OutputMode = "remote"
 		err := a.saveConfigLocked()
+		if err != nil {
+			a.cfg = previousConfig
+		} else {
+			a.configLoadError = false
+		}
 		desired := a.desired
 		a.mu.Unlock()
 		if err != nil {
@@ -1686,8 +1755,14 @@ func (a *app) routes() http.Handler {
 			return
 		}
 		a.mu.Lock()
+		previousX, previousY := a.cfg.OverlayX, a.cfg.OverlayY
 		a.cfg.OverlayX, a.cfg.OverlayY = pos.X, pos.Y
 		err = a.saveConfigLocked()
+		if err != nil {
+			a.cfg.OverlayX, a.cfg.OverlayY = previousX, previousY
+		} else {
+			a.configLoadError = false
+		}
 		a.mu.Unlock()
 		if wasRunning {
 			a.setOverlayStatus(true, "")
@@ -1809,14 +1884,56 @@ func (a *app) routes() http.Handler {
 	return localOnly(mux)
 }
 
+var postOnlyLocalPaths = map[string]bool{
+	"/api/apply-link":       true,
+	"/api/place-overlay":    true,
+	"/api/logs/open-folder": true,
+	"/api/remote-sync":      true,
+	"/api/start":            true,
+	"/api/stop":             true,
+	"/api/restart":          true,
+	"/api/exit":             true,
+	"/api/test":             true,
+}
+
+func isLocalWebHost(value string) bool {
+	host := strings.TrimSpace(value)
+	port := ""
+	if parsedHost, parsedPort, err := net.SplitHostPort(host); err == nil {
+		host, port = parsedHost, parsedPort
+	} else {
+		host = strings.Trim(host, "[]")
+	}
+	if port != "" && port != "8098" {
+		return false
+	}
+	return strings.EqualFold(host, "localhost") || host == "127.0.0.1" || host == "::1"
+}
+
 func localOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil || (host != "127.0.0.1" && host != "::1") {
+		remoteHost, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil || (remoteHost != "127.0.0.1" && remoteHost != "::1") || !isLocalWebHost(r.Host) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
+		if postOnlyLocalPaths[r.URL.Path] && r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "method not allowed"})
+			return
+		}
+		// Browsers cannot attach this non-simple header from another origin without
+		// a successful CORS preflight. We never enable CORS, so a random website
+		// cannot stop, restart or reconfigure the local Monitor process.
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			if r.Header.Get("X-LinkVideo-Request") != "1" {
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden local request"})
+				return
+			}
+		}
+		w.Header().Set("X-LinkVideo-Monitor", appVersion)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Cache-Control", "no-store")
 		next.ServeHTTP(w, r)
 	})
@@ -1862,6 +1979,27 @@ func protocolLinkArg(args []string) string {
 	return ""
 }
 
+func runningInstanceAvailable() bool {
+	req, err := http.NewRequest(http.MethodGet, "http://"+listenAddr+"/api/status", nil)
+	if err != nil {
+		return false
+	}
+	client := &http.Client{Timeout: 750 * time.Millisecond}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || strings.TrimSpace(resp.Header.Get("X-LinkVideo-Monitor")) == "" {
+		return false
+	}
+	var status Status
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&status); err != nil {
+		return false
+	}
+	return strings.TrimSpace(status.Version) != ""
+}
+
 func sendLinkToRunning(link string) error {
 	body, _ := json.Marshal(map[string]string{"link": link})
 	req, err := http.NewRequest(http.MethodPost, "http://"+listenAddr+"/api/apply-link", strings.NewReader(string(body)))
@@ -1869,6 +2007,7 @@ func sendLinkToRunning(link string) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-LinkVideo-Request", "1")
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1983,7 +2122,12 @@ func main() {
 	background := len(os.Args) > 1 && os.Args[1] == "--background"
 	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {
-		// Уже запущенный фоновый экземпляр: передаём ему ссылку с сайта и открываем интерфейс.
+		// Do not assume that every process listening on 8098 is LinkVideo Monitor:
+		// otherwise a port collision could receive the private connection link.
+		if !runningInstanceAvailable() {
+			log.Printf("локальный порт %s занят другой программой: %v", listenAddr, err)
+			return
+		}
 		if uriLink != "" {
 			_ = sendLinkToRunning(uriLink)
 		}
@@ -1998,10 +2142,19 @@ func main() {
 	if uriLink != "" {
 		if _, err := extractEncodedToken(uriLink); err == nil {
 			a.mu.Lock()
+			previousConfig := a.cfg
 			a.cfg.Link = uriLink
 			a.cfg.OutputMode = "remote"
-			_ = a.saveConfigLocked()
+			saveErr := a.saveConfigLocked()
+			if saveErr != nil {
+				a.cfg = previousConfig
+			} else {
+				a.configLoadError = false
+			}
 			a.mu.Unlock()
+			if saveErr != nil {
+				a.appendLog("Не удалось сохранить ссылку подключения: " + saveErr.Error())
+			}
 		}
 	}
 	log.Printf("%s %s", appName, appVersion)
@@ -2018,7 +2171,7 @@ func main() {
 	if !background {
 		go func() { time.Sleep(350 * time.Millisecond); openBrowser("http://" + listenAddr) }()
 	}
-	if a.cfg.AutoStart {
+	if a.cfg.AutoStart && !a.configLoadError {
 		_ = a.start()
 	}
 	startRemoteControl(a)

@@ -7,8 +7,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -113,15 +115,43 @@ func syncURLProtocolRegistration() error {
 	return nil
 }
 
-func setSleepPrevention(enabled, keepDisplayOn bool) {
-	flags := uintptr(esContinuous)
-	if enabled {
-		flags |= esSystemRequired
-		if keepDisplayOn {
-			flags |= esDisplayRequired
+type sleepPreventionRequest struct {
+	enabled       bool
+	keepDisplayOn bool
+	done          chan struct{}
+}
+
+var (
+	sleepPreventionOnce sync.Once
+	sleepPreventionCh   chan sleepPreventionRequest
+)
+
+func startSleepPreventionWorker() {
+	sleepPreventionCh = make(chan sleepPreventionRequest)
+	go func() {
+		// SetThreadExecutionState is attached to the calling Windows thread, not
+		// the whole process. Keep all set/reset calls on one persistent OS thread.
+		runtime.LockOSThread()
+		defer runtime.UnlockOSThread()
+		for req := range sleepPreventionCh {
+			flags := uintptr(esContinuous)
+			if req.enabled {
+				flags |= esSystemRequired
+				if req.keepDisplayOn {
+					flags |= esDisplayRequired
+				}
+			}
+			_, _, _ = procSetThreadExecutionState.Call(flags)
+			close(req.done)
 		}
-	}
-	_, _, _ = procSetThreadExecutionState.Call(flags)
+	}()
+}
+
+func setSleepPrevention(enabled, keepDisplayOn bool) {
+	sleepPreventionOnce.Do(startSleepPreventionWorker)
+	done := make(chan struct{})
+	sleepPreventionCh <- sleepPreventionRequest{enabled: enabled, keepDisplayOn: keepDisplayOn, done: done}
+	<-done
 }
 
 func windowClass(hwnd uintptr) string {

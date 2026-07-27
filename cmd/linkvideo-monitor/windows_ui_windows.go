@@ -59,6 +59,9 @@ const (
 	smCxVirtualScreen = 78
 	smCyVirtualScreen = 79
 
+	spiGetWorkArea          = 0x0030
+	monitorDefaultToNearest = 0x00000002
+
 	idcArrow = 32512
 	idcCross = 32515
 )
@@ -129,6 +132,8 @@ var (
 	procGetCursorPos               = user32.NewProc("GetCursorPos")
 	procDrawTextW                  = user32.NewProc("DrawTextW")
 	procSetWindowRgn               = user32.NewProc("SetWindowRgn")
+	procSystemParametersInfoW      = user32.NewProc("SystemParametersInfoW")
+	procMonitorFromRect            = user32.NewProc("MonitorFromRect")
 
 	procCreatePen          = gdi32.NewProc("CreatePen")
 	procCreateSolidBrush   = gdi32.NewProc("CreateSolidBrush")
@@ -318,17 +323,41 @@ var overlayState struct {
 	cancelled bool
 }
 
+func primaryOverlayWorkArea() rect32 {
+	var work rect32
+	ok, _, _ := procSystemParametersInfoW.Call(spiGetWorkArea, 0, uintptr(unsafe.Pointer(&work)), 0)
+	if ok != 0 && work.Right > work.Left && work.Bottom > work.Top {
+		return work
+	}
+	return rect32{Left: 0, Top: 0, Right: int32(metric(smCxScreen)), Bottom: int32(metric(smCyScreen))}
+}
+
+func overlayWorkArea(x, y, width, height int) rect32 {
+	r := rect32{Left: int32(x), Top: int32(y), Right: int32(x + width), Bottom: int32(y + height)}
+	monitor, _, _ := procMonitorFromRect.Call(uintptr(unsafe.Pointer(&r)), monitorDefaultToNearest)
+	if monitor != 0 {
+		info := monitorInfoEx{Size: uint32(unsafe.Sizeof(monitorInfoEx{}))}
+		ok, _, _ := procGetMonitorInfoW.Call(monitor, uintptr(unsafe.Pointer(&info)))
+		if ok != 0 && info.Work.Right > info.Work.Left && info.Work.Bottom > info.Work.Top {
+			return rect32{Left: info.Work.Left, Top: info.Work.Top, Right: info.Work.Right, Bottom: info.Work.Bottom}
+		}
+	}
+	return primaryOverlayWorkArea()
+}
+
 func defaultOverlayPosition(width, height int) (int, int) {
-	screenW := int(metric(smCxScreen))
-	screenH := int(metric(smCyScreen))
-	x, y := screenW-width-24, screenH-height-48
-	if x < 0 {
-		x = 0
-	}
-	if y < 0 {
-		y = 0
-	}
-	return x, y
+	work := primaryOverlayWorkArea()
+	return overlayPositionInsideWorkArea(
+		int(work.Right)-width-16, int(work.Bottom)-height-16, width, height,
+		int(work.Left), int(work.Top), int(work.Right), int(work.Bottom), 12,
+	)
+}
+
+func safeOverlayPosition(x, y, width, height int) (int, int) {
+	work := overlayWorkArea(x, y, width, height)
+	return overlayPositionInsideWorkArea(
+		x, y, width, height, int(work.Left), int(work.Top), int(work.Right), int(work.Bottom), 12,
+	)
 }
 
 func acquireOverlaySingleton() (uintptr, bool) {
@@ -392,6 +421,8 @@ func runOverlayWindow(x, y int, placing bool) error {
 	width, height := 214, 36
 	if x < 0 || y < 0 {
 		x, y = defaultOverlayPosition(width, height)
+	} else {
+		x, y = safeOverlayPosition(x, y, width, height)
 	}
 	className, _ := syscall.UTF16PtrFromString("LVScreenStatusOverlayV4")
 	title, _ := syscall.UTF16PtrFromString("Screen recording indicator")
@@ -474,7 +505,9 @@ func overlayWndProc(hwnd uintptr, message uint32, wParam, lParam uintptr) uintpt
 			_, _, _ = procReleaseCapture.Call()
 			var r rect32
 			_, _, _ = procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r)))
-			overlayState.result = OverlayPosition{X: int(r.Left), Y: int(r.Top)}
+			x, y := safeOverlayPosition(int(r.Left), int(r.Top), int(r.Right-r.Left), int(r.Bottom-r.Top))
+			overlayState.result = OverlayPosition{X: x, Y: y}
+			_, _, _ = procSetWindowPos.Call(hwnd, ^uintptr(0), uintptr(x), uintptr(y), 0, 0, 0x0001|0x0004|0x0010)
 			_, _, _ = procDestroyWindow.Call(hwnd)
 			return 0
 		}

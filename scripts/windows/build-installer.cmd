@@ -28,7 +28,7 @@ cd /d "%ROOT%\installer"
 set GOOS=windows
 set GOARCH=amd64
 set GOAMD64=v1
-go build -trimpath -ldflags="-s -w -H=windowsgui" -o "%BUILD%\LinkVideo.Monitor_0.7.1_Setup.exe" .
+go build -trimpath -ldflags="-s -w -H=windowsgui" -o "%BUILD%\LinkVideo.Monitor_0.7.6_Setup.exe" .
 set "RC=%ERRORLEVEL%"
 cd /d "%ROOT%"
 
@@ -36,5 +36,5 @@ del /q "%PAYLOAD_ZIP%" 2>nul
 rmdir /s /q "%PAYLOAD_DIR%" 2>nul
 
 if not "%RC%"=="0" exit /b %RC%
-echo Built: %BUILD%\LinkVideo.Monitor_0.7.1_Setup.exe
+echo Built: %BUILD%\LinkVideo.Monitor_0.7.6_Setup.exe
 endlocal

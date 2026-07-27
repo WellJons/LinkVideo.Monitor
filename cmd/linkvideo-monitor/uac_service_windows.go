@@ -253,15 +253,24 @@ func loadSecureCaptureRequests(dir string) map[uint32]secureCaptureRequest {
 			continue
 		}
 		path := filepath.Join(dir, entry.Name())
+		nameID := strings.TrimSuffix(strings.TrimPrefix(entry.Name(), "session-"), ".json")
+		parsedID, parseErr := strconv.ParseUint(nameID, 10, 32)
+		info, statErr := entry.Info()
+		if parseErr != nil || statErr != nil || info.Size() < 2 || info.Size() > 64<<10 {
+			_ = os.Remove(path)
+			continue
+		}
 		data, err := os.ReadFile(path)
 		if err != nil {
 			continue
 		}
 		var req secureCaptureRequest
-		if json.Unmarshal(data, &req) != nil || !validSecureCaptureRequest(req) {
+		if json.Unmarshal(data, &req) != nil || req.SessionID != uint32(parsedID) || !validSecureCaptureRequest(req) {
+			_ = os.Remove(path)
 			continue
 		}
-		if now.Sub(time.UnixMilli(req.UpdatedUnix)) > 8*time.Second {
+		age := now.Sub(time.UnixMilli(req.UpdatedUnix))
+		if age > 8*time.Second || age < -2*time.Second {
 			_ = os.Remove(path)
 			continue
 		}
@@ -271,7 +280,8 @@ func loadSecureCaptureRequests(dir string) map[uint32]secureCaptureRequest {
 }
 
 func validSecureCaptureRequest(req secureCaptureRequest) bool {
-	if req.SessionID == 0xffffffff || !strings.HasPrefix(req.MappingName, `Local\LinkVideoMonitorSecure_`) {
+	expectedMapping := fmt.Sprintf(`Local\LinkVideoMonitorSecure_%d`, req.SessionID)
+	if req.SessionID == 0xffffffff || req.ClientPID == 0 || !strings.EqualFold(req.MappingName, expectedMapping) {
 		return false
 	}
 	if req.Width < 2 || req.Height < 2 || req.OutputWidth < 2 || req.OutputHeight < 2 {
@@ -285,20 +295,37 @@ func validSecureCaptureRequest(req secureCaptureRequest) bool {
 
 func requestKey(req secureCaptureRequest) string {
 	return strings.Join([]string{
-		req.MappingName, strconv.Itoa(req.X), strconv.Itoa(req.Y), strconv.Itoa(req.Width), strconv.Itoa(req.Height),
+		req.MappingName, strconv.FormatUint(uint64(req.ClientPID), 10), strconv.Itoa(req.X), strconv.Itoa(req.Y), strconv.Itoa(req.Width), strconv.Itoa(req.Height),
 		strconv.Itoa(req.OutputWidth), strconv.Itoa(req.OutputHeight), strconv.Itoa(req.FPS),
 		strconv.FormatBool(req.Cursor), strconv.FormatBool(req.Privacy),
 	}, "|")
 }
 
+func isLinkVideoMonitorProcessName(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "linkvideo.monitor.exe" {
+		return true
+	}
+	return strings.HasPrefix(name, "linkvideo.monitor_") && strings.HasSuffix(name, ".exe")
+}
+
 func launchSecureAgent(req secureCaptureRequest) (*secureAgentProcess, error) {
+	var clientSession uint32
+	ok, _, callErr := procProcessIdToSessionIdSecure.Call(uintptr(req.ClientPID), uintptr(unsafe.Pointer(&clientSession)))
+	if ok == 0 || clientSession != req.SessionID {
+		return nil, fmt.Errorf("requesting process is not in session %d", req.SessionID)
+	}
+	if !isLinkVideoMonitorProcessName(processImageName(req.ClientPID)) {
+		return nil, errors.New("secure capture request was not created by LinkVideo Monitor")
+	}
+
 	exe, err := os.Executable()
 	if err != nil {
 		return nil, err
 	}
 	currentProcess, _, _ := procGetCurrentProcessService.Call()
 	var processToken uintptr
-	ok, _, callErr := procOpenProcessTokenService.Call(currentProcess, tokenAllForLaunch, uintptr(unsafe.Pointer(&processToken)))
+	ok, _, callErr = procOpenProcessTokenService.Call(currentProcess, tokenAllForLaunch, uintptr(unsafe.Pointer(&processToken)))
 	if ok == 0 {
 		return nil, fmt.Errorf("OpenProcessToken: %v", callErr)
 	}

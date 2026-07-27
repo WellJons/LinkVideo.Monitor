@@ -47,6 +47,7 @@ var (
 
 type secureCaptureRequest struct {
 	SessionID    uint32 `json:"session_id"`
+	ClientPID    uint32 `json:"client_pid"`
 	MappingName  string `json:"mapping_name"`
 	X            int    `json:"x"`
 	Y            int    `json:"y"`
@@ -136,7 +137,7 @@ func currentProcessSessionID() (uint32, error) {
 
 func (b *windowsSecureDesktopBridge) request() secureCaptureRequest {
 	return secureCaptureRequest{
-		SessionID: b.sessionID, MappingName: b.mappingName,
+		SessionID: b.sessionID, ClientPID: uint32(os.Getpid()), MappingName: b.mappingName,
 		X: b.plan.X, Y: b.plan.Y, Width: b.plan.Width, Height: b.plan.Height,
 		OutputWidth: b.plan.OutputWidth, OutputHeight: b.plan.OutputHeight,
 		FPS: b.cfg.FPS, Cursor: b.cfg.Cursor, Privacy: b.cfg.PrivacyProtection,
@@ -150,16 +151,25 @@ func (b *windowsSecureDesktopBridge) writeRequest() error {
 	if err != nil {
 		return err
 	}
-	tmp := b.requestPath + ".tmp-" + strconv.Itoa(os.Getpid())
-	if err := os.WriteFile(tmp, data, 0o666); err != nil {
+	dir := filepath.Dir(b.requestPath)
+	tmp, err := os.CreateTemp(dir, "session-request-*.tmp")
+	if err != nil {
 		return err
 	}
-	_ = os.Remove(b.requestPath)
-	if err := os.Rename(tmp, b.requestPath); err != nil {
-		_ = os.Remove(tmp)
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	if err := writeFull(tmp, data); err != nil {
+		_ = tmp.Close()
 		return err
 	}
-	return nil
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return replaceFileAtomically(tmpPath, b.requestPath)
 }
 
 func (b *windowsSecureDesktopBridge) Run(ctx context.Context, handler secureFrameHandler) {

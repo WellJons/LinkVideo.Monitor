@@ -61,7 +61,6 @@ const (
 	gdiBI_RGB         = 0
 	gdiDIB_RGB_COLORS = 0
 	gdiSRCCOPY        = 0x00CC0020
-	gdiCAPTUREBLT     = 0x40000000
 	gdiCursorShowing  = 0x00000001
 	gdiDINormal       = 0x0003
 	gdiHalfTone       = 4
@@ -156,6 +155,12 @@ func runGDICapture(out io.Writer, x, y, width, height, outputWidth, outputHeight
 	next := time.Now()
 
 	for {
+		// Do not add CAPTUREBLT here. On some Windows/GPU combinations it
+		// temporarily removes and restores the software/animated system cursor
+		// for every BitBlt call. That makes the physical pointer flicker while
+		// the stream itself remains stable because we draw its cursor manually.
+		// SRCCOPY is sufficient for the composed desktop on supported Windows.
+		//
 		// When Windows switches to the secure UAC desktop, BitBlt can fail or
 		// return no new pixels. We intentionally keep the previous DIB contents
 		// and still emit a frame, preserving the encoder and RTSP connection.
@@ -164,14 +169,14 @@ func runGDICapture(out io.Writer, x, y, width, height, outputWidth, outputHeight
 			ok, _, _ = captureBitBlt.Call(
 				memoryDC, 0, 0, uintptr(outputWidth), uintptr(outputHeight),
 				screenDC, uintptr(int64(x)), uintptr(int64(y)),
-				gdiSRCCOPY|gdiCAPTUREBLT,
+				gdiSRCCOPY,
 			)
 		} else {
 			_, _, _ = captureSetStretchBltMode.Call(memoryDC, gdiHalfTone)
 			ok, _, _ = captureStretchBlt.Call(
 				memoryDC, 0, 0, uintptr(outputWidth), uintptr(outputHeight),
 				screenDC, uintptr(int64(x)), uintptr(int64(y)), uintptr(width), uintptr(height),
-				gdiSRCCOPY|gdiCAPTUREBLT,
+				gdiSRCCOPY,
 			)
 		}
 		if ok != 0 && drawCursor {
@@ -184,7 +189,7 @@ func runGDICapture(out io.Writer, x, y, width, height, outputWidth, outputHeight
 			screenDC, _, _ = captureGetDC.Call(0)
 		}
 
-		if _, err := out.Write(frame); err != nil {
+		if err := writeFull(out, frame); err != nil {
 			if err == syscall.ERROR_BROKEN_PIPE {
 				return nil
 			}

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -693,5 +694,165 @@ func TestPrivacyPixelationChangesOnlyProtectedArea(t *testing.T) {
 	}
 	if got := frame[(50*100+50)*4 : (50*100+50)*4+4]; bytes.Equal(got, beforeInside) {
 		t.Fatalf("protected pixel was not changed: %v", got)
+	}
+}
+
+func TestLocalOnlyProtectsMutatingEndpoints(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	h := localOnly(next)
+
+	tests := []struct {
+		name       string
+		method     string
+		path       string
+		host       string
+		remoteAddr string
+		header     string
+		want       int
+	}{
+		{name: "safe local get", method: http.MethodGet, path: "/api/status", host: "127.0.0.1:8098", remoteAddr: "127.0.0.1:50000", want: http.StatusNoContent},
+		{name: "mutating get rejected", method: http.MethodGet, path: "/api/stop", host: "127.0.0.1:8098", remoteAddr: "127.0.0.1:50000", want: http.StatusMethodNotAllowed},
+		{name: "post without local header rejected", method: http.MethodPost, path: "/api/stop", host: "127.0.0.1:8098", remoteAddr: "127.0.0.1:50000", want: http.StatusForbidden},
+		{name: "authorized local post", method: http.MethodPost, path: "/api/stop", host: "localhost:8098", remoteAddr: "127.0.0.1:50000", header: "1", want: http.StatusNoContent},
+		{name: "dns rebinding host rejected", method: http.MethodGet, path: "/api/status", host: "attacker.example", remoteAddr: "127.0.0.1:50000", want: http.StatusForbidden},
+		{name: "non loopback rejected", method: http.MethodGet, path: "/api/status", host: "127.0.0.1:8098", remoteAddr: "192.0.2.10:50000", want: http.StatusForbidden},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(tc.method, "http://"+tc.host+tc.path, nil)
+			req.Host = tc.host
+			req.RemoteAddr = tc.remoteAddr
+			if tc.header != "" {
+				req.Header.Set("X-LinkVideo-Request", tc.header)
+			}
+			rr := httptest.NewRecorder()
+			h.ServeHTTP(rr, req)
+			if rr.Code != tc.want {
+				t.Fatalf("status=%d, want %d, body=%q", rr.Code, tc.want, rr.Body.String())
+			}
+			if tc.want == http.StatusNoContent && rr.Header().Get("X-LinkVideo-Monitor") != appVersion {
+				t.Fatalf("missing instance identity header")
+			}
+		})
+	}
+}
+
+func TestRecordLaunchErrorIgnoresStaleGeneration(t *testing.T) {
+	a := &app{
+		desired:    true,
+		running:    true,
+		generation: 8,
+		lastError:  "new stream is healthy",
+	}
+	a.recordLaunchError(7, errors.New("obsolete launch failed"))
+	if !a.desired || !a.running {
+		t.Fatalf("stale generation changed active stream state: desired=%v running=%v", a.desired, a.running)
+	}
+	if a.lastError != "new stream is healthy" {
+		t.Fatalf("stale generation overwrote last error: %q", a.lastError)
+	}
+}
+
+func TestFailStartIgnoresStaleGeneration(t *testing.T) {
+	a := &app{desired: true, generation: 12, lastError: "new start"}
+	if a.failStart(11, errors.New("obsolete preflight failed")) {
+		t.Fatal("stale generation was incorrectly applied")
+	}
+	if !a.desired || a.lastError != "new start" {
+		t.Fatalf("stale preflight changed state: desired=%v lastError=%q", a.desired, a.lastError)
+	}
+}
+
+type shortWriter struct {
+	buf bytes.Buffer
+	max int
+}
+
+func (w *shortWriter) Write(p []byte) (int, error) {
+	if len(p) > w.max {
+		p = p[:w.max]
+	}
+	return w.buf.Write(p)
+}
+
+func TestWriteFullHandlesPartialWrites(t *testing.T) {
+	w := &shortWriter{max: 3}
+	want := []byte("complete raw frame")
+	if err := writeFull(w, want); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(w.buf.Bytes(), want) {
+		t.Fatalf("got %q want %q", w.buf.Bytes(), want)
+	}
+}
+
+func TestSaveConfigAtomicallyReplacesExistingFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	a := &app{cfg: defaultConfig(), cfgPath: path}
+	if err := a.saveConfigLocked(); err != nil {
+		t.Fatal(err)
+	}
+	a.cfg.FPS = 25
+	a.cfg.Link = "linkvideomonitor:test"
+	if err := a.saveConfigLocked(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got Config
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("saved config is invalid JSON: %v", err)
+	}
+	if got.FPS != 25 || got.Link != a.cfg.Link {
+		t.Fatalf("saved config is stale: %+v", got)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "config-*.tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("temporary config files remain: %v", matches)
+	}
+}
+
+func TestUnsupportedRemoteCommandIsNotMarkedProcessed(t *testing.T) {
+	dir := t.TempDir()
+	a := &app{cfg: defaultConfig(), cfgPath: filepath.Join(dir, "config.json")}
+	a.cfg.RemoteLastCommandID = "previous"
+	before := a.cfg
+	err := a.applyRemoteResponse(remoteSyncResponse{
+		Command: &remoteCommand{ID: json.RawMessage(`"bad-1"`), Action: "delete_everything"},
+	})
+	if err == nil {
+		t.Fatal("unsupported remote command was accepted")
+	}
+	if a.cfg.RemoteLastCommandID != before.RemoteLastCommandID {
+		t.Fatalf("unsupported command was marked as processed: %q", a.cfg.RemoteLastCommandID)
+	}
+}
+
+func TestStartDoesNotOverwriteUnreadableConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	original := []byte(`{"broken":`)
+	if err := os.WriteFile(path, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := &app{cfg: defaultConfig(), cfgPath: path, configLoadError: true}
+	if err := a.start(); err == nil {
+		t.Fatal("start unexpectedly accepted an unreadable configuration")
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("unreadable config was overwritten: %q", got)
 	}
 }

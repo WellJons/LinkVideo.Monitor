@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -190,7 +191,7 @@ func (a *app) syncRemoteOnce() error {
 		return err
 	}
 	var result remoteSyncResponse
-	dec := json.NewDecoder(resp.Body)
+	dec := json.NewDecoder(io.LimitReader(resp.Body, 1<<20))
 	if err := dec.Decode(&result); err != nil {
 		a.setRemoteError(fmt.Errorf("не удалось прочитать ответ API: %w", err))
 		return err
@@ -261,6 +262,11 @@ func (a *app) applyRemoteResponse(resp remoteSyncResponse) error {
 		if action != "" && commandID == "" {
 			return errors.New("у дистанционной команды отсутствует обязательный id")
 		}
+		switch action {
+		case "", "restart_stream":
+		default:
+			return fmt.Errorf("неподдерживаемая дистанционная команда %q", action)
+		}
 	}
 
 	a.mu.Lock()
@@ -303,15 +309,8 @@ func (a *app) applyRemoteResponse(resp remoteSyncResponse) error {
 		a.setOverlayStatus(wasRunning, "")
 	}
 
-	if newCommand {
-		switch action {
-		case "restart_stream":
-			return a.restart()
-		case "":
-			return nil
-		default:
-			return fmt.Errorf("неподдерживаемая дистанционная команда %q", action)
-		}
+	if newCommand && action == "restart_stream" {
+		return a.restart()
 	}
 	if configChanged && wasDesired {
 		return a.restart()

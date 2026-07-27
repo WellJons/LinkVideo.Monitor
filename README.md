@@ -1,4 +1,4 @@
-# LinkVideo Monitor 0.7.1 Beta
+# LinkVideo Monitor 0.7.6 Beta
 
 Windows-приложение для захвата экранов и системного звука с публикацией трансляции в LinkVideo по RTSP/RTMP.
 
@@ -11,7 +11,7 @@ Windows-приложение для захвата экранов и систе�
 - 10/15/20/25 FPS;
 - автоматический и ручной выбор Intel Quick Sync, NVIDIA NVENC, AMD AMF или libx264;
 - системный звук AAC;
-- служба `LinkVideoMonitorCapture` для защищённого рабочего стола UAC;
+- служба `LinkVideoMonitorCapture` для UAC и настоящего экрана блокировки Windows;
 - пикселизация паролей, PIN, OTP/2FA, CVV/CVC и платёжных полей;
 - автозапуск, восстановление после сна и удалённая синхронизация настроек;
 - локальный веб-интерфейс.
@@ -29,7 +29,7 @@ scripts\windows\build-release.cmd
 Результаты появятся в `build`:
 
 - `LinkVideo.Monitor.exe`;
-- `LinkVideo.Monitor_0.7.1_Setup.exe`.
+- `LinkVideo.Monitor_0.7.6_Setup.exe`.
 
 ## Где находится код
 

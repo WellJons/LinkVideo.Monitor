@@ -21,6 +21,14 @@ func startResumeWatcher(a *app) {
 				a.appendLog("Обнаружено возобновление Windows после сна; поток будет перезапущен")
 				go func() {
 					time.Sleep(2 * time.Second) // дать сети и аудиоустройствам восстановиться
+					// The user may stop the stream during this delay. Do not turn it
+					// back on from an obsolete resume notification.
+					a.mu.Lock()
+					stillDesired := a.cfg.RestartAfterResume && a.desired
+					a.mu.Unlock()
+					if !stillDesired {
+						return
+					}
 					if err := a.restart(); err != nil {
 						a.appendLog("Не удалось перезапустить поток после сна: " + err.Error())
 					}
