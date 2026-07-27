@@ -170,11 +170,11 @@ func probeVideoEncoder(cfg Config, encoder string, plan capturePlan) error {
 	}
 	switch encoder {
 	case "h264_nvenc":
-		args = append(args, "-preset", "p1", "-tune", "ull", "-rc", "cbr")
+		args = append(args, "-preset", "p4", "-tune", "ll", "-rc", "vbr", "-multipass", "qres", "-spatial_aq", "1")
 	case "h264_qsv":
-		args = append(args, "-preset", "veryfast", "-look_ahead", "0")
+		args = append(args, "-preset", "medium", "-look_ahead", "0")
 	case "h264_amf":
-		args = append(args, "-usage", "lowlatency", "-quality", "speed", "-rc", "cbr")
+		args = append(args, "-usage", "lowlatency", "-quality", "balanced", "-rc", "vbr_peak")
 	}
 	args = append(args, "-f", "null", "-")
 	cmd := exec.CommandContext(ctx, resolveExecutable(cfg.FFmpegPath), args...)

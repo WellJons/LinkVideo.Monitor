@@ -24,7 +24,7 @@ import (
 
 const (
 	appName    = "LinkVideo Monitor"
-	appVersion = "0.7.6-beta"
+	appVersion = "0.7.10-beta"
 	listenAddr = "127.0.0.1:8098"
 )
 
@@ -55,9 +55,10 @@ type Config struct {
 	QualityProfile        string `json:"quality_profile"` // economy, fast, medium
 	FPS                   int    `json:"fps"`
 	BitrateKbps           int    `json:"bitrate_kbps"`
+	RateControl           string `json:"rate_control"` // cbr or vbr
 	MaxrateKbps           int    `json:"maxrate_kbps"`
 	BufsizeKbps           int    `json:"bufsize_kbps"`
-	Encoder               string `json:"encoder"`         // auto, libx264, h264_nvenc, h264_amf, h264_qsv
+	Encoder               string `json:"encoder"`         // libx264, h264_nvenc, h264_amf, h264_qsv
 	CaptureBackend        string `json:"capture_backend"` // auto, dxgi, gdi
 	Preset                string `json:"preset"`
 	Cursor                bool   `json:"cursor"`
@@ -68,6 +69,7 @@ type Config struct {
 	AudioBitrateKbps      int    `json:"audio_bitrate_kbps"`
 	AudioSampleRate       int    `json:"audio_sample_rate"`
 	AudioChannels         int    `json:"audio_channels"`
+	AudioAdvanceMs        int    `json:"audio_advance_ms"`
 	LaunchWithWindows     bool   `json:"launch_with_windows"`
 	AutoStart             bool   `json:"auto_start"`
 	RestartAfterResume    bool   `json:"restart_after_resume"`
@@ -193,8 +195,8 @@ type app struct {
 
 func defaultConfig() Config {
 	return Config{
-		DefaultsRevision:      7,
-		PrivacyProtection:     true,
+		DefaultsRevision:      10,
+		PrivacyProtection:     false,
 		ResolutionProfile:     "original",
 		OutputMode:            "remote",
 		Protocol:              "rtsp",
@@ -210,11 +212,12 @@ func defaultConfig() Config {
 		Height:                1080,
 		FPS:                   15,
 		BitrateKbps:           1024,
+		RateControl:           "cbr",
 		MaxrateKbps:           1024,
 		BufsizeKbps:           2048,
-		Encoder:               "auto",
+		Encoder:               "libx264",
 		CaptureBackend:        "auto",
-		Preset:                "ultrafast",
+		Preset:                "veryfast",
 		Cursor:                true,
 		AudioEnabled:          false,
 		AudioQuality:          "medium",
@@ -222,6 +225,7 @@ func defaultConfig() Config {
 		AudioBitrateKbps:      128,
 		AudioSampleRate:       48000,
 		AudioChannels:         2,
+		AudioAdvanceMs:        800,
 		LaunchWithWindows:     true,
 		AutoStart:             true,
 		RestartAfterResume:    true,
@@ -302,10 +306,11 @@ func (a *app) loadConfig() error {
 	migrated := false
 	if _, ok := raw["defaults_revision"]; !ok {
 		// Однократное обновление самых ранних beta-конфигов.
-		cfg.DefaultsRevision = 7
-		cfg.Encoder = "auto"
+		cfg.DefaultsRevision = 10
+		cfg.Encoder = "libx264"
 		cfg.CaptureBackend = "auto"
-		cfg.PrivacyProtection = true
+		cfg.PrivacyProtection = false
+		cfg.Preset = "veryfast"
 		cfg.ResolutionProfile = "original"
 		cfg.Cursor = true
 		cfg.OverlayEnabled = true
@@ -320,15 +325,18 @@ func (a *app) loadConfig() error {
 			cfg.CaptureMode = "full"
 		}
 		migrated = true
-	} else if cfg.DefaultsRevision < 7 {
+	} else if cfg.DefaultsRevision < 10 {
 		// Версия 0.5.4 закрепляет обязательный автозапуск потока и восстановление после сна,
 		// сохраняя безопасные значения предыдущих версий.
 		// Версия 0.4.4 меняла безопасные начальные значения, исправляла
 		// захват курсора и удаляет профиль 2000 Кбит/с. Миграция выполняется один раз.
-		cfg.DefaultsRevision = 7
-		cfg.Encoder = "auto"
+		cfg.DefaultsRevision = 10
+		cfg.Encoder = "libx264"
 		cfg.CaptureBackend = "auto"
-		cfg.PrivacyProtection = true
+		// Защита полей остаётся доступной, но после обновления выключается: реактивное
+		// распознавание UI Automation не должно создавать ложное чувство гарантии.
+		cfg.PrivacyProtection = false
+		cfg.Preset = "veryfast"
 		if cfg.ResolutionProfile == "" {
 			cfg.ResolutionProfile = "original"
 		}
@@ -406,12 +414,15 @@ func normalizeConfig(c *Config) {
 			c.QualityProfile, c.BitrateKbps = "medium", 1024
 		}
 	}
+	if c.RateControl != "vbr" {
+		c.RateControl = "cbr"
+	}
 	c.MaxrateKbps = c.BitrateKbps
 	c.BufsizeKbps = c.BitrateKbps * 2
 	switch c.Encoder {
-	case "auto", "libx264", "h264_nvenc", "h264_amf", "h264_qsv":
+	case "libx264", "h264_nvenc", "h264_amf", "h264_qsv":
 	default:
-		c.Encoder = "auto"
+		c.Encoder = "libx264"
 	}
 	switch c.CaptureBackend {
 	case "auto", "dxgi", "gdi":
@@ -420,7 +431,7 @@ func normalizeConfig(c *Config) {
 	}
 	allowedPresets := map[string]bool{"ultrafast": true, "superfast": true, "veryfast": true, "faster": true, "fast": true}
 	if !allowedPresets[c.Preset] {
-		c.Preset = "ultrafast"
+		c.Preset = "veryfast"
 	}
 	if c.RestartDelayS < 1 {
 		c.RestartDelayS = 1
@@ -465,6 +476,12 @@ func normalizeConfig(c *Config) {
 	}
 	if c.AudioChannels != 1 {
 		c.AudioChannels = 2
+	}
+	if c.AudioAdvanceMs < 0 {
+		c.AudioAdvanceMs = 0
+	}
+	if c.AudioAdvanceMs > 2000 {
+		c.AudioAdvanceMs = 2000
 	}
 	// OverlayText is kept only to load configs from 0.3.x. The current
 	// indicator text is fixed in the helper; legacy custom text is ignored.
@@ -1256,7 +1273,7 @@ func buildEncoderFFmpegDetailed(cfg Config, plan capturePlan, encoder, systemAud
 	if encoder != "libx264" {
 		encoderPixelFormat = "nv12"
 	}
-	videoChain := fmt.Sprintf("[%d:v]setpts=N/(%d*TB),scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=fast_bilinear,format=%s[vout]", videoInput, cfg.FPS, encoderPixelFormat)
+	videoChain := fmt.Sprintf("[%d:v]setpts=N/(%d*TB),scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=bicubic+accurate_rnd+full_chroma_int,format=%s[vout]", videoInput, cfg.FPS, encoderPixelFormat)
 	args = append(args, "-filter_complex", videoChain, "-map", "[vout]")
 	if audioInput >= 0 {
 		args = append(args, "-map", fmt.Sprintf("%d:a:0", audioInput))
@@ -1267,27 +1284,29 @@ func buildEncoderFFmpegDetailed(cfg Config, plan capturePlan, encoder, systemAud
 	case "h264_nvenc":
 		args = append(args,
 			"-c:v", "h264_nvenc",
-			"-preset", "p1",
-			"-tune", "ull",
-			"-rc", "cbr",
+			"-preset", "p4",
+			"-tune", "ll",
+			"-rc", map[bool]string{true: "cbr", false: "vbr"}[cfg.RateControl == "cbr"],
+			"-multipass", "qres",
+			"-spatial_aq", "1",
 			"-bf", "0")
 	case "h264_amf":
 		args = append(args,
 			"-c:v", "h264_amf",
 			"-usage", "lowlatency",
-			"-quality", "speed",
-			"-rc", "cbr",
+			"-quality", "balanced",
+			"-rc", map[bool]string{true: "cbr", false: "vbr_peak"}[cfg.RateControl == "cbr"],
 			"-bf", "0")
 	case "h264_qsv":
 		args = append(args,
 			"-c:v", "h264_qsv",
-			"-preset", "veryfast",
+			"-preset", "medium",
 			"-look_ahead", "0",
 			"-bf", "0")
 	default:
 		x264Params := fmt.Sprintf(
-			"nal-hrd=cbr:keyint=%d:min-keyint=%d:scenecut=0:repeat-headers=1:aud=1",
-			gopFrames, gopFrames,
+			"nal-hrd=%s:keyint=%d:min-keyint=%d:scenecut=0:repeat-headers=1:aud=1",
+			map[bool]string{true: "cbr", false: "vbr"}[cfg.RateControl == "cbr"], gopFrames, gopFrames,
 		)
 		args = append(args,
 			"-c:v", "libx264",
@@ -1298,8 +1317,11 @@ func buildEncoderFFmpegDetailed(cfg Config, plan capturePlan, encoder, systemAud
 	}
 
 	args = append(args,
-		"-b:v", fmt.Sprintf("%dk", cfg.BitrateKbps),
-		"-minrate", fmt.Sprintf("%dk", cfg.BitrateKbps),
+		"-b:v", fmt.Sprintf("%dk", cfg.BitrateKbps))
+	if cfg.RateControl == "cbr" {
+		args = append(args, "-minrate", fmt.Sprintf("%dk", cfg.BitrateKbps))
+	}
+	args = append(args,
 		"-maxrate", fmt.Sprintf("%dk", cfg.MaxrateKbps),
 		"-bufsize", fmt.Sprintf("%dk", cfg.BufsizeKbps),
 		"-r", strconv.Itoa(cfg.FPS),
@@ -1315,13 +1337,20 @@ func buildEncoderFFmpegDetailed(cfg Config, plan capturePlan, encoder, systemAud
 	}
 
 	if cfg.AudioEnabled {
+		audioFilter := "aresample=async=1:first_pts=0,asetpts=N/SR/TB"
+		if cfg.AudioSource == "system" && cfg.AudioAdvanceMs > 0 {
+			// WASAPI + AAC + RTSP commonly introduces a stable audio delay. Drop
+			// the initial amount and rebuild timestamps so live sound is advanced
+			// without accumulating an ever-growing queue.
+			audioFilter = fmt.Sprintf("atrim=start=%.3f,aresample=async=1:first_pts=0,asetpts=N/SR/TB", float64(cfg.AudioAdvanceMs)/1000)
+		}
 		args = append(args,
 			"-c:a", "aac",
 			"-profile:a", "aac_low",
 			"-b:a", fmt.Sprintf("%dk", cfg.AudioBitrateKbps),
 			"-ar", strconv.Itoa(cfg.AudioSampleRate),
 			"-ac", strconv.Itoa(cfg.AudioChannels),
-			"-af", "asetpts=N/SR/TB")
+			"-af", audioFilter)
 	} else {
 		args = append(args, "-an")
 	}
@@ -1705,6 +1734,18 @@ func (a *app) routes() http.Handler {
 		a.requestRemoteSync()
 		writeJSON(w, 200, map[string]string{"status": "ok"})
 	})
+	mux.HandleFunc("/api/check-updates", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			writeJSON(w, 405, map[string]string{"error": "method not allowed"})
+			return
+		}
+		result, err := checkForUpdates(r.Context())
+		if err != nil {
+			writeJSON(w, 400, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, 200, result)
+	})
 	mux.HandleFunc("/api/status", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, a.status()) })
 	mux.HandleFunc("/api/monitors", func(w http.ResponseWriter, r *http.Request) {
 		ms, err := listMonitors()
@@ -1886,6 +1927,7 @@ func (a *app) routes() http.Handler {
 
 var postOnlyLocalPaths = map[string]bool{
 	"/api/apply-link":       true,
+	"/api/check-updates":    true,
 	"/api/place-overlay":    true,
 	"/api/logs/open-folder": true,
 	"/api/remote-sync":      true,

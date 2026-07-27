@@ -42,6 +42,7 @@ type privacyTrackedElement struct {
 	Element   uintptr
 	Rect      privacyScreenRect
 	Expires   time.Time
+	HoldUntil time.Time
 }
 
 type windowsPrivacyTracker struct {
@@ -79,7 +80,7 @@ func (t *windowsPrivacyTracker) Run(ctx context.Context) {
 
 	// The privacy worker is intentionally independent from video capture. It
 	// inspects only the focused input and refreshes already-confirmed fields.
-	ticker := time.NewTicker(120 * time.Millisecond)
+	ticker := time.NewTicker(40 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		select {
@@ -164,31 +165,43 @@ func (t *windowsPrivacyTracker) refreshTracked() {
 
 	keep := t.elements[:0]
 	for _, item := range t.elements {
-		valid, _, _ := procIsWindow.Call(item.HWND)
-		if valid == 0 || !item.Expires.After(now) || item.Element == 0 {
+		validWindow, _, _ := procIsWindow.Call(item.HWND)
+		if validWindow == 0 || !item.Expires.After(now) {
 			comRelease(item.Element)
 			continue
 		}
-		if title := privacyWindowTitle(item.HWND); item.Title != "" && title != "" && title != item.Title {
-			comRelease(item.Element)
+
+		// During a browser reload the accessibility element is often destroyed
+		// before its replacement is exposed. Keep the last confirmed rectangle
+		// briefly, so raw card/CVV/password contents cannot flash for several
+		// frames while UI Automation rebuilds the page tree.
+		if item.Element == 0 {
+			if item.HoldUntil.After(now) {
+				keep = append(keep, item)
+			}
 			continue
 		}
-		if uiaCurrentInt32(item.Element, 38) != 0 {
+
+		currentTitle := privacyWindowTitle(item.HWND)
+		offscreen := uiaCurrentInt32(item.Element, 38) != 0
+		rect, rectOK := privacyElementRect(item.Element)
+		titleChanged := item.Title != "" && currentTitle != "" && currentTitle != item.Title
+		if offscreen || !rectOK || titleChanged {
 			comRelease(item.Element)
-			continue
-		}
-		rect, ok := privacyElementRect(item.Element)
-		if !ok {
-			comRelease(item.Element)
+			item.Element = 0
+			if item.HoldUntil.Before(now) {
+				item.HoldUntil = now.Add(1500 * time.Millisecond)
+			}
+			item.Expires = item.HoldUntil
+			keep = append(keep, item)
 			continue
 		}
 		if rectDistance(item.Rect, rect) <= 3 {
 			rect = item.Rect
 		}
 		item.Rect = rect
-		// A valid, visible field stays protected while it exists. This keeps CVV,
-		// card and OTP fields covered after focus moves, without fixed stale masks.
 		item.Expires = now.Add(2 * time.Minute)
+		item.HoldUntil = now.Add(1500 * time.Millisecond)
 		keep = append(keep, item)
 	}
 	t.elements = keep
@@ -271,6 +284,7 @@ func (t *windowsPrivacyTracker) remember(hwnd uintptr, title, signature string, 
 		item.Rect = rect
 		item.Title = title
 		item.Expires = now.Add(2 * time.Minute)
+		item.HoldUntil = now.Add(1500 * time.Millisecond)
 		return
 	}
 
@@ -281,7 +295,7 @@ func (t *windowsPrivacyTracker) remember(hwnd uintptr, title, signature string, 
 	}
 	t.elements = append(t.elements, privacyTrackedElement{
 		HWND: hwnd, Title: title, Signature: signature, Element: element,
-		Rect: rect, Expires: now.Add(2 * time.Minute),
+		Rect: rect, Expires: now.Add(2 * time.Minute), HoldUntil: now.Add(1500 * time.Millisecond),
 	})
 }
 

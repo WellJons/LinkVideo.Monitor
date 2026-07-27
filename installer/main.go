@@ -18,7 +18,7 @@ import (
 
 const (
 	productName = "LinkVideo Monitor"
-	version     = "0.7.6"
+	version     = "0.7.10"
 )
 
 //go:embed payload.zip

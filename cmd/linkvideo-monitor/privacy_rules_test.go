@@ -51,3 +51,15 @@ func TestPrivacyRulesUseBoundaries(t *testing.T) {
 		}
 	}
 }
+
+func TestGoogleCardSecurityCodeClassIsSensitive(t *testing.T) {
+	meta := privacyElementMetadata{
+		ClassName:    "jfk-textinput b3id-text-input b3-text-input numeric b3-security-code input-file",
+		AutomationID: "ariaId_8",
+		AriaProps:    "name=cvc autocomplete=cc-csc",
+		ProcessName:  "chrome.exe",
+	}
+	if !privacyMetadataIsSensitive(meta) {
+		t.Fatal("Google payment CVV/CVC metadata must be classified as sensitive")
+	}
+}

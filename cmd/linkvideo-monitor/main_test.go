@@ -198,7 +198,7 @@ func TestCursorAndProfilesAffectCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := quoteCommand(args)
-	for _, part := range []string{"-f rawvideo", "-b:v 1024k", "-minrate 1024k", "-maxrate 1024k"} {
+	for _, part := range []string{"-f rawvideo", "-b:v 1024k", "-maxrate 1024k", "nal-hrd=cbr", "-minrate 1024k"} {
 		if !strings.Contains(joined, part) {
 			t.Fatalf("encoder command does not contain %q: %s", part, joined)
 		}
@@ -319,14 +319,46 @@ func TestOldConfigTurnsAudioOffOnMigration(t *testing.T) {
 
 func TestDefaultProductOptions(t *testing.T) {
 	cfg := defaultConfig()
-	if !cfg.Cursor || !cfg.OverlayEnabled || !cfg.PrivacyProtection {
-		t.Fatalf("cursor and overlay must be enabled by default: %+v", cfg)
+	if !cfg.Cursor || !cfg.OverlayEnabled || cfg.PrivacyProtection {
+		t.Fatalf("cursor and overlay must be enabled, privacy protection disabled by default: %+v", cfg)
 	}
 	if cfg.QualityProfile != "medium" || cfg.BitrateKbps != 1024 {
 		t.Fatalf("unexpected default video quality: %+v", cfg)
 	}
 	if cfg.ResolutionProfile != "original" {
 		t.Fatalf("unexpected default resolution: %+v", cfg)
+	}
+	if cfg.Encoder != "libx264" {
+		t.Fatalf("software H.264 must be selected by default: %+v", cfg)
+	}
+}
+
+func TestRateControlModesAndFixedGOP(t *testing.T) {
+	for _, tc := range []struct {
+		mode string
+		want string
+		not  string
+	}{
+		{mode: "cbr", want: "-minrate 1024k"},
+		{mode: "vbr", not: "-minrate 1024k"},
+	} {
+		cfg := defaultConfig()
+		cfg.OutputMode = "local"
+		cfg.RateControl = tc.mode
+		_, args, _, err := buildEncoderFFmpegDetailed(cfg, capturePlan{OutputWidth: 1920, OutputHeight: 1080}, "h264_qsv", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		joined := quoteCommand(args)
+		if tc.want != "" && !strings.Contains(joined, tc.want) {
+			t.Fatalf("%s command missing %q: %s", tc.mode, tc.want, joined)
+		}
+		if tc.not != "" && strings.Contains(joined, tc.not) {
+			t.Fatalf("%s command unexpectedly contains %q: %s", tc.mode, tc.not, joined)
+		}
+		if !strings.Contains(joined, "-g 30") {
+			t.Fatalf("QSV GOP is not two seconds: %s", joined)
+		}
 	}
 }
 
@@ -344,7 +376,7 @@ func TestLegacyDefaultsMigration(t *testing.T) {
 	if a.cfg.CaptureMode != "full" || !a.cfg.Cursor || !a.cfg.OverlayEnabled {
 		t.Fatalf("legacy migration failed: %+v", a.cfg)
 	}
-	if a.cfg.QualityProfile != "medium" || a.cfg.BitrateKbps != 1024 || a.cfg.DefaultsRevision != 7 || a.cfg.Encoder != "auto" || a.cfg.CaptureBackend != "auto" {
+	if a.cfg.QualityProfile != "medium" || a.cfg.BitrateKbps != 1024 || a.cfg.DefaultsRevision != 10 || a.cfg.Encoder != "libx264" || a.cfg.CaptureBackend != "auto" {
 		t.Fatalf("legacy defaults were not updated: %+v", a.cfg)
 	}
 }
@@ -662,7 +694,6 @@ func TestOddMultiMonitorDimensionsAreNormalizedForH264(t *testing.T) {
 func TestVideoEncoderCanBeSelectedManuallyInUI(t *testing.T) {
 	for _, want := range []string{
 		`<select id="encoder">`,
-		`value="auto">Автоматически`,
 		`value="h264_qsv">Intel Quick Sync`,
 		`value="h264_nvenc">NVIDIA NVENC`,
 		`value="h264_amf">AMD AMF`,

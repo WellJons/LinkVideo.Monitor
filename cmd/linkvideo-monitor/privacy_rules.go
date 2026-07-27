@@ -59,8 +59,8 @@ func privacyMetadataIsSensitive(meta privacyElementMetadata) bool {
 	}
 	cvvTerms := []string{
 		"cvv", "cvc", "cvn", "csc", "card verification value", "card verification code",
-		"card security code", "payment security code", "код безопасности карты",
-		"код cvc", "код cvv", "autocomplete cc csc",
+		"card security code", "security code", "payment security code", "код безопасности карты",
+		"код cvc", "код cvv", "cc csc", "security-code", "autocomplete cc csc",
 	}
 	pinTerms := []string{
 		"pin", "pin code", "pincode", "bank pin", "card pin", "пин", "пин код",

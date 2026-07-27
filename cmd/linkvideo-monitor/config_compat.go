@@ -25,7 +25,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		"offset_y": true, "width": true, "height": true, "fps": true,
 		"bitrate_kbps": true, "maxrate_kbps": true, "bufsize_kbps": true,
 		"audio_bitrate_kbps": true, "audio_sample_rate": true,
-		"audio_channels": true, "restart_delay_s": true,
+		"audio_channels": true, "audio_advance_ms": true, "restart_delay_s": true,
 		"overlay_x": true, "overlay_y": true,
 		"remote_sync_interval_min": true,
 	}
@@ -66,6 +66,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		{"audio_bitrate_kbps", &base.AudioBitrateKbps},
 		{"audio_sample_rate", &base.AudioSampleRate},
 		{"audio_channels", &base.AudioChannels},
+		{"audio_advance_ms", &base.AudioAdvanceMs},
 		{"restart_delay_s", &base.RestartDelayS},
 		{"overlay_x", &base.OverlayX}, {"overlay_y", &base.OverlayY},
 		{"remote_sync_interval_min", &base.RemoteSyncIntervalMin},
