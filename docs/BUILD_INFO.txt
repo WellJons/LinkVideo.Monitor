@@ -1,0 +1,5 @@
+LinkVideo Monitor 0.7.1 Beta
+
+Windows amd64, GOAMD64=v1
+Main executable includes capture, UAC service, secure desktop helper, overlay and WASAPI modes.
+Installer includes FFmpeg and installs LinkVideoMonitorCapture service.

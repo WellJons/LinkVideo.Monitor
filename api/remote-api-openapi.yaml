@@ -1,0 +1,78 @@
+openapi: 3.0.3
+info:
+  title: LinkVideo Monitor Remote Sync API
+  version: "1.2"
+paths:
+  /api/monitor/sync:
+    post:
+      summary: Получить состояние Monitor и вернуть основные настройки или перезапуск потока
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SyncRequest'
+      responses:
+        '200':
+          description: Настройки и необязательная команда
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncResponse'
+components:
+  schemas:
+    SyncRequest:
+      type: object
+      required: [api_version, connection_link, client, state, settings]
+      properties:
+        api_version: {type: integer, enum: [1]}
+        connection_link: {type: string}
+        client:
+          type: object
+          properties:
+            product: {type: string}
+            version: {type: string}
+            computer_name: {type: string}
+            os: {type: string}
+            architecture: {type: string}
+        state:
+          type: object
+          properties:
+            process_running: {type: boolean}
+            process_pid: {type: integer}
+            stream_desired: {type: boolean}
+            streaming: {type: boolean}
+            ffmpeg_pid: {type: integer}
+            started_at: {type: string, format: date-time}
+            restarts: {type: integer}
+            last_error: {type: string}
+            applied_revision: {type: integer, format: int64}
+            last_command_id: {type: string}
+        settings:
+          $ref: '#/components/schemas/MonitorSettings'
+    MonitorSettings:
+      type: object
+      properties:
+        protocol: {type: string, enum: [rtsp, rtmp]}
+        fps: {type: integer, enum: [10, 15, 20, 25]}
+        bitrate_kbps: {type: integer, enum: [256, 512, 1024]}
+        audio_enabled: {type: boolean}
+    SyncResponse:
+      type: object
+      properties:
+        success: {type: boolean}
+        message: {type: string}
+        revision: {type: integer, format: int64}
+        settings:
+          $ref: '#/components/schemas/MonitorSettings'
+        command:
+          type: object
+          required: [id, action]
+          properties:
+            id:
+              oneOf:
+                - {type: string}
+                - {type: integer}
+            action:
+              type: string
+              enum: [restart_stream]
