@@ -1,0 +1,29 @@
+# Build outputs
+/build/
+/dist/
+/release/
+/installer/payload.zip
+*.pdb
+
+# Local configuration and logs
+*.log
+logs/
+data/
+config.json
+settings.json
+*.local.json
+.env
+.env.*
+
+# Certificates and private keys
+*.pfx
+*.p12
+*.pem
+*.key
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+Desktop.ini
