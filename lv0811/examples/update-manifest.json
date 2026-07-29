@@ -1,7 +1,0 @@
-{
-  "version": "0.7.7",
-  "download_url": "https://updates.example.ru/LinkVideo.Monitor_0.7.7_Setup.exe",
-  "sha256": "REPLACE_WITH_SETUP_SHA256",
-  "notes": "Исправления качества изображения, синхронизации звука и защиты полей.",
-  "mandatory": false
-}
