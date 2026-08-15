@@ -1,0 +1,119 @@
+name: Apply structured FFmpeg progress once
+
+on:
+  push:
+    branches:
+      - feature/encoder-fallback-cpu-optimization
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, '[structured-progress-applied]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/encoder-fallback-cpu-optimization
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.20.x'
+
+      - name: Integrate structured FFmpeg progress
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          main = Path('cmd/linkvideo-monitor/main.go')
+          text = main.read_text(encoding='utf-8')
+          old = 'args := []string{"-hide_banner", "-loglevel", "info", "-fflags", "+genpts"}'
+          new = 'args := []string{"-hide_banner", "-loglevel", "info", "-nostats", "-stats_period", "1", "-progress", "pipe:1", "-fflags", "+genpts"}'
+          assert old in text, 'ffmpeg global args block not found'
+          text = text.replace(old, new, 1)
+          old = 'go func() { defer wg.Done(); a.scanPipe("ffmpeg", stdout) }()'
+          new = 'go func() { defer wg.Done(); a.scanPipe("ffmpeg-progress", stdout) }()'
+          assert old in text, 'stdout scanner block not found'
+          text = text.replace(old, new, 1)
+          main.write_text(text, encoding='utf-8')
+
+          logs = Path('cmd/linkvideo-monitor/logs.go')
+          text = logs.read_text(encoding='utf-8')
+          old = 'if prefix == "ffmpeg" && a.processFFmpegLine(prefix, line) {'
+          new = 'if (prefix == "ffmpeg" || prefix == "ffmpeg-progress") && a.processFFmpegLine(prefix, line) {'
+          assert old in text, 'scanPipe progress hook not found'
+          text = text.replace(old, new, 1)
+          marker = '''\tif clean == "" {\n\t\treturn false\n\t}\n'''
+          insert = marker + '''\tif prefix == "ffmpeg-progress" {\n\t\tkey, value, ok := strings.Cut(clean, "=")\n\t\tif !ok {\n\t\t\treturn true\n\t\t}\n\t\ta.mu.Lock()\n\t\tswitch key {\n\t\tcase "frame":\n\t\t\ta.encoderStartupConfirmed = true\n\t\tcase "fps":\n\t\t\ta.videoFPS, _ = strconv.ParseFloat(value, 64)\n\t\tcase "speed":\n\t\t\ta.videoSpeed, _ = strconv.ParseFloat(strings.TrimSuffix(value, "x"), 64)\n\t\tcase "dup_frames":\n\t\t\ta.videoDup, _ = strconv.Atoi(value)\n\t\tcase "drop_frames":\n\t\t\ta.videoDrop, _ = strconv.Atoi(value)\n\t\t}\n\t\ta.mu.Unlock()\n\t\treturn true\n\t}\n'''
+          assert marker in text, 'processFFmpegLine insertion point not found'
+          text = text.replace(marker, insert, 1)
+          logs.write_text(text, encoding='utf-8')
+          PY
+
+          cat > cmd/linkvideo-monitor/ffmpeg_progress_test.go <<'EOF'
+          package main
+
+          import (
+            "strings"
+            "testing"
+          )
+
+          func TestStructuredFFmpegProgressUpdatesRuntimeMetrics(t *testing.T) {
+            a := &app{}
+            for _, line := range []string{
+              "frame=123",
+              "fps=14.90",
+              "speed=1.12x",
+              "dup_frames=3",
+              "drop_frames=2",
+              "progress=continue",
+            } {
+              if !a.processFFmpegLine("ffmpeg-progress", line) {
+                t.Fatalf("structured progress line was not consumed: %q", line)
+              }
+            }
+            if !a.encoderStartupConfirmed {
+              t.Fatal("structured progress did not confirm encoder startup")
+            }
+            if a.videoFPS != 14.90 || a.videoSpeed != 1.12 || a.videoDup != 3 || a.videoDrop != 2 {
+              t.Fatalf("unexpected progress metrics: fps=%v speed=%v dup=%d drop=%d", a.videoFPS, a.videoSpeed, a.videoDup, a.videoDrop)
+            }
+          }
+
+          func TestEncoderUsesMachineReadableProgressChannel(t *testing.T) {
+            cfg := defaultConfig()
+            cfg.OutputMode = "local"
+            plan := capturePlan{Mode: "monitor", Width: 1280, Height: 720, OutputWidth: 1280, OutputHeight: 720}
+            _, args, _, err := buildEncoderFFmpegDetailed(cfg, plan, "libx264", "", "")
+            if err != nil {
+              t.Fatal(err)
+            }
+            joined := strings.Join(args, " ")
+            for _, want := range []string{"-nostats", "-stats_period 1", "-progress pipe:1"} {
+              if !strings.Contains(joined, want) {
+                t.Fatalf("missing %q in ffmpeg args: %s", want, joined)
+              }
+            }
+          }
+          EOF
+
+      - name: Format, test and cross-build
+        shell: bash
+        run: |
+          gofmt -w cmd/linkvideo-monitor/main.go cmd/linkvideo-monitor/logs.go cmd/linkvideo-monitor/ffmpeg_progress_test.go
+          go test ./cmd/linkvideo-monitor
+          go test -race ./cmd/linkvideo-monitor
+          go vet ./cmd/linkvideo-monitor
+          GOOS=windows GOARCH=amd64 GOAMD64=v1 go build -trimpath -o /tmp/LinkVideo.Monitor.exe ./cmd/linkvideo-monitor
+
+      - name: Commit integrated changes
+        shell: bash
+        run: |
+          git rm .github/workflows/apply-structured-progress-once.yml
+          git config user.name "LinkVideo Build Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add cmd/linkvideo-monitor/main.go cmd/linkvideo-monitor/logs.go cmd/linkvideo-monitor/ffmpeg_progress_test.go
+          git commit -m "Use structured FFmpeg runtime telemetry [structured-progress-applied]"
+          git push origin HEAD:feature/encoder-fallback-cpu-optimization
