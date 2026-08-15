@@ -1,0 +1,161 @@
+name: Apply safe reconnect integration once
+
+on:
+  push:
+    branches:
+      - feature/encoder-fallback-cpu-optimization
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, '[safe-reconnect-applied]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/encoder-fallback-cpu-optimization
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.20.x'
+
+      - name: Integrate safe reconnect policy
+        shell: bash
+        run: |
+          cat > cmd/linkvideo-monitor/reconnect_policy.go <<'EOF'
+          package main
+
+          import (
+            "fmt"
+            "strings"
+            "time"
+          )
+
+          func transportReconnectDelay(consecutive int) time.Duration {
+            switch {
+            case consecutive <= 1:
+              return 700 * time.Millisecond
+            case consecutive == 2:
+              return 1500 * time.Millisecond
+            case consecutive == 3:
+              return 3 * time.Second
+            default:
+              return 5 * time.Second
+            }
+          }
+
+          func transportInterruptedReason(protocol string) string {
+            switch strings.ToLower(strings.TrimSpace(protocol)) {
+            case "rtmp":
+              return "Сеанс RTMP завершился; выполняется автоматическое переподключение"
+            default:
+              return "Сеанс RTSP завершился; выполняется автоматическое переподключение"
+            }
+          }
+
+          func reconnectTelemetryLine(encoder string, targetFPS int, streamDuration time.Duration, fps, speed float64, dup, drop int, retry time.Duration) string {
+            return fmt.Sprintf(
+              "Диагностика перед переподключением: encoder=%s, работа=%s, цель=%d FPS, фактически=%.2f FPS, speed=%.2fx, dup=%d, drop=%d, повтор через %s",
+              encoderLabel(encoder), streamDuration.Round(time.Second), targetFPS, fps, speed, dup, drop, retry,
+            )
+          }
+          EOF
+
+          cat > cmd/linkvideo-monitor/reconnect_policy_test.go <<'EOF'
+          package main
+
+          import (
+            "strings"
+            "testing"
+            "time"
+          )
+
+          func TestTransportReconnectDelayBackoff(t *testing.T) {
+            cases := []struct {
+              n int
+              want time.Duration
+            }{
+              {1, 700 * time.Millisecond},
+              {2, 1500 * time.Millisecond},
+              {3, 3 * time.Second},
+              {4, 5 * time.Second},
+              {9, 5 * time.Second},
+            }
+            for _, tc := range cases {
+              if got := transportReconnectDelay(tc.n); got != tc.want {
+                t.Fatalf("attempt %d: got %s want %s", tc.n, got, tc.want)
+              }
+            }
+          }
+
+          func TestTransportInterruptedReasonDoesNotBlameServer(t *testing.T) {
+            for _, protocol := range []string{"rtsp", "rtmp"} {
+              got := strings.ToLower(transportInterruptedReason(protocol))
+              if strings.Contains(got, "сервер") || strings.Contains(got, "server") {
+                t.Fatalf("reason must stay neutral: %q", got)
+              }
+              if !strings.Contains(got, protocol) {
+                t.Fatalf("reason %q does not mention protocol %s", got, protocol)
+              }
+            }
+          }
+
+          func TestReconnectTelemetryContainsRuntimeMetrics(t *testing.T) {
+            got := reconnectTelemetryLine("libx264", 15, 42*time.Second, 14.8, 1.03, 2, 1, 700*time.Millisecond)
+            for _, want := range []string{"14.80 FPS", "speed=1.03x", "dup=2", "drop=1", "700ms"} {
+              if !strings.Contains(got, want) {
+                t.Fatalf("telemetry missing %q: %s", want, got)
+              }
+            }
+          }
+          EOF
+
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path('cmd/linkvideo-monitor/main.go')
+          text = p.read_text(encoding='utf-8')
+
+          old = '''func (a *app) runLoop(gen int64) {\n\tfirst := true\n\tfor {'''
+          new = '''func (a *app) runLoop(gen int64) {\n\tfirst := true\n\ttransportFailures := 0\n\tfor {'''
+          assert old in text, 'runLoop start not found'
+          text = text.replace(old, new, 1)
+
+          old = '''\t\tstreamDuration := time.Since(a.startedAt)\n\t\tif encoderFailed {'''
+          new = '''\t\tstreamDuration := time.Since(a.startedAt)\n\t\tvideoFPS, videoSpeed, videoDup, videoDrop := a.videoFPS, a.videoSpeed, a.videoDup, a.videoDrop\n\t\tif streamDuration >= 30*time.Second {\n\t\t\t// A connection that stayed healthy for a while starts the transport\n\t\t\t// retry sequence from the fast first attempt again.\n\t\t\ttransportFailures = 0\n\t\t}\n\t\tif encoderFailed {'''
+          assert old in text, 'stream duration block not found'
+          text = text.replace(old, new, 1)
+
+          old = '''\t\tif reason == "" && err != nil && stillDesired {\n\t\t\treason = "RTSP-соединение было прервано"\n\t\t}\n\t\tif reason != "" && stillDesired {'''
+          new = '''\t\ttransportFailure := reason == "" && err != nil && stillDesired\n\t\tif transportFailure {\n\t\t\ttransportFailures++\n\t\t\tdelay = transportReconnectDelay(transportFailures)\n\t\t\treason = transportInterruptedReason(runtimeCfg.Protocol)\n\t\t}\n\t\tif reason != "" && stillDesired {'''
+          assert old in text, 'generic reconnect reason block not found'
+          text = text.replace(old, new, 1)
+
+          old = '''\t\tif len(reconnectSnapshot) > 0 {\n\t\t\ta.saveReconnectHistory(reconnectSnapshot)\n\t\t}\n\t\ta.setOverlayStatus(false, "")'''
+          new = '''\t\tif len(reconnectSnapshot) > 0 {\n\t\t\ta.saveReconnectHistory(reconnectSnapshot)\n\t\t}\n\t\tif err != nil && stillDesired {\n\t\t\ta.appendLog(reconnectTelemetryLine(encoder, runtimeCfg.FPS, streamDuration, videoFPS, videoSpeed, videoDup, videoDrop, delay))\n\t\t}\n\t\ta.setOverlayStatus(false, "")'''
+          assert old in text, 'reconnect history block not found'
+          text = text.replace(old, new, 1)
+
+          p.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Format, test and cross-build
+        shell: bash
+        run: |
+          gofmt -w cmd/linkvideo-monitor/main.go cmd/linkvideo-monitor/reconnect_policy.go cmd/linkvideo-monitor/reconnect_policy_test.go
+          go test ./cmd/linkvideo-monitor
+          go test -race ./cmd/linkvideo-monitor
+          go vet ./cmd/linkvideo-monitor
+          GOOS=windows GOARCH=amd64 GOAMD64=v1 go build -trimpath -o /tmp/LinkVideo.Monitor.exe ./cmd/linkvideo-monitor
+
+      - name: Commit integrated changes
+        shell: bash
+        run: |
+          git rm .github/workflows/apply-safe-reconnect-once.yml
+          git config user.name "LinkVideo Build Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add cmd/linkvideo-monitor/main.go cmd/linkvideo-monitor/reconnect_policy.go cmd/linkvideo-monitor/reconnect_policy_test.go
+          git commit -m "Add fast safe reconnect policy and diagnostics [safe-reconnect-applied]"
+          git push origin HEAD:feature/encoder-fallback-cpu-optimization
