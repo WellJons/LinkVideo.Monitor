@@ -63,6 +63,19 @@ func adapterMatchesEncoder(adapterNames, encoder string) bool {
 	}
 }
 
+func capabilityProbePlan(cfg Config) capturePlan {
+	width, height := even(cfg.Width), even(cfg.Height)
+	if cfg.ResolutionProfile == "full_hd" {
+		width, height = 1920, 1080
+	} else if cfg.ResolutionProfile == "hd" {
+		width, height = 1280, 720
+	}
+	if width < 128 || height < 72 {
+		width, height = 1920, 1080
+	}
+	return capturePlan{Width: width, Height: height, OutputWidth: width, OutputHeight: height}
+}
+
 func (a *app) getEncoderCapabilities(force bool) []EncoderCapability {
 	a.mu.Lock()
 	if !force && len(a.encoderCapabilities) > 0 && time.Since(a.encoderCapabilitiesAt) < 30*time.Minute {
@@ -73,7 +86,7 @@ func (a *app) getEncoderCapabilities(force bool) []EncoderCapability {
 	cfg := a.cfg
 	a.mu.Unlock()
 
-	plan := capturePlan{Width: 1280, Height: 720, OutputWidth: 1280, OutputHeight: 720}
+	plan := capabilityProbePlan(cfg)
 	adapters := strings.Join(videoAdapterNames(), "\n")
 	candidates := append(encoderCandidatesForCodec("h264"), encoderCandidatesForCodec("h265")...)
 	results := make([]EncoderCapability, len(candidates))
