@@ -24,6 +24,7 @@ jobs:
         id: release
         shell: bash
         run: |
+          set -euo pipefail
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             TAG="${{ inputs.tag }}"
           else
@@ -33,13 +34,18 @@ jobs:
             echo "Release tag is empty" >&2
             exit 1
           fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           VERSION="${TAG#v}"
+          if ! [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+)+([+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Unsupported release version: $VERSION" >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Check update repository token
         shell: bash
         run: |
+          set -euo pipefail
           if [ -z "$GH_TOKEN" ]; then
             echo "Repository secret UPDATES_REPO_TOKEN is not configured." >&2
             exit 1
@@ -50,31 +56,61 @@ jobs:
           SOURCE_TOKEN: ${{ github.token }}
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p release-files
           GH_TOKEN="$SOURCE_TOKEN" gh release download "${{ steps.release.outputs.tag }}" \
             --repo "$GITHUB_REPOSITORY" \
             --dir release-files \
             --pattern 'LinkVideo.Monitor_*_Setup.exe' \
             --pattern 'LinkVideo.Monitor_*_SHA256SUMS.txt'
-          ls -lah release-files
-          SETUP_FILE="$(find release-files -maxdepth 1 -type f -name 'LinkVideo.Monitor_*_Setup.exe' | head -n 1)"
-          if [ -z "$SETUP_FILE" ]; then
-            echo "Setup executable was not found in the source release." >&2
+
+          mapfile -t SETUPS < <(find release-files -maxdepth 1 -type f -name 'LinkVideo.Monitor_*_Setup.exe' -print)
+          mapfile -t SUMS < <(find release-files -maxdepth 1 -type f -name 'LinkVideo.Monitor_*_SHA256SUMS.txt' -print)
+          if [ "${#SETUPS[@]}" -ne 1 ]; then
+            echo "Expected exactly one Setup executable, found ${#SETUPS[@]}." >&2
             exit 1
           fi
-          echo "SETUP_FILE=$SETUP_FILE" >> "$GITHUB_ENV"
-          echo "SETUP_NAME=$(basename "$SETUP_FILE")" >> "$GITHUB_ENV"
+          if [ "${#SUMS[@]}" -ne 1 ]; then
+            echo "Expected exactly one SHA256SUMS file, found ${#SUMS[@]}." >&2
+            exit 1
+          fi
+          echo "SETUP_FILE=${SETUPS[0]}" >> "$GITHUB_ENV"
+          echo "SETUP_NAME=$(basename "${SETUPS[0]}")" >> "$GITHUB_ENV"
+          echo "CHECKSUM_FILE=${SUMS[0]}" >> "$GITHUB_ENV"
+          ls -lah release-files
 
-      - name: Calculate installer SHA-256
+      - name: Verify private release checksum
         shell: bash
         run: |
-          SHA256="$(sha256sum "$SETUP_FILE" | awk '{print $1}')"
-          echo "SETUP_SHA256=$SHA256" >> "$GITHUB_ENV"
-          echo "$SHA256  $SETUP_NAME"
+          set -euo pipefail
+          EXPECTED="$(python3 - "$CHECKSUM_FILE" "$SETUP_NAME" <<'PY'
+          import pathlib, sys
+          sums_path, setup_name = sys.argv[1:3]
+          matches = []
+          for raw in pathlib.Path(sums_path).read_text(encoding='utf-8').splitlines():
+              line = raw.strip()
+              if not line:
+                  continue
+              parts = line.split()
+              if len(parts) >= 2 and pathlib.Path(parts[-1].lstrip('*')).name == setup_name:
+                  matches.append(parts[0].lower())
+          if len(matches) != 1 or len(matches[0]) != 64 or any(c not in '0123456789abcdef' for c in matches[0]):
+              raise SystemExit(f'Expected one valid SHA-256 entry for {setup_name}, got {matches!r}')
+          print(matches[0])
+          PY
+          )"
+          ACTUAL="$(sha256sum "$SETUP_FILE" | awk '{print $1}')"
+          if [ "$EXPECTED" != "$ACTUAL" ]; then
+            echo "Private release checksum mismatch for $SETUP_NAME" >&2
+            exit 1
+          fi
+          echo "SETUP_SHA256=$ACTUAL" >> "$GITHUB_ENV"
+          echo "$ACTUAL  $SETUP_NAME"
 
       - name: Publish public release asset
         shell: bash
         run: |
+          set -euo pipefail
           TAG="${{ steps.release.outputs.tag }}"
           if gh release view "$TAG" --repo "$UPDATES_REPO" >/dev/null 2>&1; then
             gh release upload "$TAG" "$SETUP_FILE" --repo "$UPDATES_REPO" --clobber
@@ -86,9 +122,30 @@ jobs:
             gh "${ARGS[@]}"
           fi
 
-      - name: Update public manifest
+      - name: Verify public release asset before publishing manifest
         shell: bash
         run: |
+          set -euo pipefail
+          TAG="${{ steps.release.outputs.tag }}"
+          rm -rf public-verify
+          mkdir public-verify
+          gh release download "$TAG" --repo "$UPDATES_REPO" --dir public-verify --pattern "$SETUP_NAME"
+          PUBLIC_FILE="public-verify/$SETUP_NAME"
+          if [ ! -f "$PUBLIC_FILE" ]; then
+            echo "Public release asset was not downloaded." >&2
+            exit 1
+          fi
+          PUBLIC_SHA="$(sha256sum "$PUBLIC_FILE" | awk '{print $1}')"
+          if [ "$PUBLIC_SHA" != "$SETUP_SHA256" ]; then
+            echo "Public release asset checksum mismatch." >&2
+            exit 1
+          fi
+          echo "Public asset verified: $PUBLIC_SHA  $SETUP_NAME"
+
+      - name: Update public manifest last
+        shell: bash
+        run: |
+          set -euo pipefail
           TAG="${{ steps.release.outputs.tag }}"
           VERSION="${{ steps.release.outputs.version }}"
           DOWNLOAD_URL="https://github.com/$UPDATES_REPO/releases/download/$TAG/$SETUP_NAME"
@@ -122,6 +179,19 @@ jobs:
       - name: Verify public manifest
         shell: bash
         run: |
+          set -euo pipefail
           curl --fail --silent --show-error \
-            "https://raw.githubusercontent.com/$UPDATES_REPO/main/update-manifest.json" \
-            | python3 -m json.tool
+            -H 'Cache-Control: no-cache' \
+            "https://raw.githubusercontent.com/$UPDATES_REPO/main/update-manifest.json?ts=$(date +%s)" \
+            | python3 - "$SETUP_SHA256" "${{ steps.release.outputs.version }}" <<'PY'
+          import json, sys
+          expected_sha, expected_version = sys.argv[1:3]
+          data = json.load(sys.stdin)
+          if data.get("version") != expected_version:
+              raise SystemExit(f"manifest version mismatch: {data.get('version')!r}")
+          if data.get("sha256", "").lower() != expected_sha.lower():
+              raise SystemExit("manifest checksum mismatch")
+          if not data.get("download_url"):
+              raise SystemExit("manifest download_url is empty")
+          print(json.dumps(data, ensure_ascii=False, indent=2))
+          PY
