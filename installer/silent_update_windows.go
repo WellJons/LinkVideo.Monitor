@@ -13,6 +13,7 @@ func init() {
 	if len(os.Args) < 2 || os.Args[1] != "--silent-update-elevated" {
 		return
 	}
+	defer scheduleSelfDelete()
 	if !isProcessElevated() {
 		appendSilentUpdateLog("silent update rejected: installer is not elevated")
 		os.Exit(21)
@@ -20,11 +21,17 @@ func init() {
 	time.Sleep(1500 * time.Millisecond)
 	if err := installProductSilentSystem(); err != nil {
 		appendSilentUpdateLog("silent update failed: " + err.Error())
+		if recoveryErr := recoverCaptureServiceAfterFailedUpdate(); recoveryErr != nil {
+			appendSilentUpdateLog("service recovery after failed update also failed: " + recoveryErr.Error())
+		} else {
+			appendSilentUpdateLog("service recovered after failed update")
+		}
 		os.Exit(22)
 	}
 	appendSilentUpdateLog("silent update completed: " + version)
 	os.Exit(0)
 }
+
 func installProductSilentSystem() error {
 	dest := defaultInstallDir()
 	legacyLocalDest := filepath.Join(os.Getenv("LOCALAPPDATA"), "Programs", "LinkVideo.Monitor")
@@ -53,6 +60,15 @@ func installProductSilentSystem() error {
 	}
 	return nil
 }
+
+func recoverCaptureServiceAfterFailedUpdate() error {
+	appPath := filepath.Join(defaultInstallDir(), "LinkVideo.Monitor.exe")
+	if _, err := os.Stat(appPath); err != nil {
+		return fmt.Errorf("основной EXE недоступен для восстановления службы: %w", err)
+	}
+	return installUACServiceElevated(appPath)
+}
+
 func appendSilentUpdateLog(message string) {
 	base := os.Getenv("PROGRAMDATA")
 	if base == "" {
