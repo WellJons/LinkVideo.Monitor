@@ -46,14 +46,14 @@ if errorlevel 1 exit /b 1
 
 echo [3/4] Build branded installer...
 cd /d "%ROOT%\installer"
-go build -trimpath -ldflags="-s -w -H=windowsgui" -o "%BUILD%\LinkVideo.Monitor_0.8.11_Setup.exe" .
+go build -trimpath -ldflags="-s -w -H=windowsgui" -o "%BUILD%\LinkVideo.Monitor_0.8.12_Setup.exe" .
 set "RC=%ERRORLEVEL%"
 cd /d "%ROOT%"
 if not "%RC%"=="0" exit /b %RC%
 
 where python >nul 2>nul
 if not errorlevel 1 (
-  python "%ROOT%\tools\patch_pe_icon.py" "%BUILD%\LinkVideo.Monitor_0.8.11_Setup.exe" "%ROOT%\assets\icons\linkvideo_original.ico"
+  python "%ROOT%\tools\patch_pe_icon.py" "%BUILD%\LinkVideo.Monitor_0.8.12_Setup.exe" "%ROOT%\assets\icons\linkvideo_original.ico"
   if errorlevel 1 exit /b 1
 )
 
@@ -61,5 +61,5 @@ echo [4/4] Cleanup temporary files...
 del /q "%PAYLOAD_ZIP%" 2>nul
 rmdir /s /q "%PAYLOAD_DIR%" 2>nul
 
-echo Built: %BUILD%\LinkVideo.Monitor_0.8.11_Setup.exe
+echo Built: %BUILD%\LinkVideo.Monitor_0.8.12_Setup.exe
 endlocal

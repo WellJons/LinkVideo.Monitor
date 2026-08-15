@@ -42,9 +42,10 @@ type captureSupervisor struct {
 	displayOff     bool
 	lockedFrame    []byte
 	protectedFrame []byte
+	normalPriority bool
 }
 
-func newCaptureSupervisor(a *app, cfg Config, plan capturePlan) *captureSupervisor {
+func newCaptureSupervisor(a *app, cfg Config, plan capturePlan, normalPriority bool) *captureSupervisor {
 	frameLen := plan.OutputWidth * plan.OutputHeight * 4
 	s := &captureSupervisor{
 		app: a, cfg: cfg, plan: plan, frameLen: frameLen,
@@ -53,6 +54,7 @@ func newCaptureSupervisor(a *app, cfg Config, plan capturePlan) *captureSupervis
 		display:        newDisplayPowerStateWatcher(),
 		lockedFrame:    makeSessionLockedFrame(plan.OutputWidth, plan.OutputHeight),
 		protectedFrame: makeProtectedDesktopFrame(plan.OutputWidth, plan.OutputHeight),
+		normalPriority: normalPriority,
 	}
 	// A single centered message can fall directly on the seam between two
 	// physical displays. Build the lock fallback per captured monitor so the
@@ -254,7 +256,9 @@ func (s *captureSupervisor) runProducer(ctx context.Context, backend string) err
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	lowerProcessPriority(cmd.Process.Pid)
+	if !s.normalPriority {
+		lowerProcessPriority(cmd.Process.Pid)
+	}
 
 	stderrDone := make(chan struct{})
 	go func() {

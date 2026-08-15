@@ -24,7 +24,7 @@ import (
 
 const (
 	appName    = "LinkVideo Monitor"
-	appVersion = "0.8.11-beta"
+	appVersion = "0.8.12-beta"
 	listenAddr = "127.0.0.1:8098"
 )
 
@@ -780,6 +780,7 @@ func (a *app) runLoop(gen int64) {
 			return
 		}
 		encoder := a.selectVideoEncoder(cfg, plan)
+		runtimeCfg, runtimeOptimized := a.runtimeConfigForPerformance(cfg, plan, encoder)
 		a.mu.Lock()
 		currentGeneration := a.desired && a.generation == gen
 		a.mu.Unlock()
@@ -792,7 +793,7 @@ func (a *app) runLoop(gen int64) {
 		var microphoneBridge *microphoneBridge
 		audioURL := ""
 		microphoneURL := ""
-		if cfg.AudioEnabled && cfg.AudioSource == "system" {
+		if runtimeCfg.AudioEnabled && runtimeCfg.AudioSource == "system" {
 			audioBridge, audioURL, err = startSystemAudioBridge(streamCtx, a)
 			if err != nil {
 				cancelStream()
@@ -800,8 +801,8 @@ func (a *app) runLoop(gen int64) {
 				return
 			}
 		}
-		if cfg.MicrophoneEnabled {
-			microphoneBridge, microphoneURL, err = startMicrophoneBridge(streamCtx, a, cfg)
+		if runtimeCfg.MicrophoneEnabled {
+			microphoneBridge, microphoneURL, err = startMicrophoneBridge(streamCtx, a, runtimeCfg)
 			if err != nil {
 				if audioBridge != nil {
 					audioBridge.Close()
@@ -812,7 +813,7 @@ func (a *app) runLoop(gen int64) {
 			}
 		}
 
-		resolved, args, _, err := buildEncoderFFmpegDetailed(cfg, plan, encoder, audioURL, microphoneURL)
+		resolved, args, _, err := buildEncoderFFmpegDetailed(runtimeCfg, plan, encoder, audioURL, microphoneURL)
 		if err != nil {
 			if audioBridge != nil {
 				audioBridge.Close()
@@ -825,7 +826,7 @@ func (a *app) runLoop(gen int64) {
 			return
 		}
 
-		cmd := exec.Command(resolveExecutable(cfg.FFmpegPath), args...)
+		cmd := exec.Command(resolveExecutable(runtimeCfg.FFmpegPath), args...)
 		videoIn, err := cmd.StdinPipe()
 		if err != nil {
 			if audioBridge != nil {
@@ -866,11 +867,11 @@ func (a *app) runLoop(gen int64) {
 
 		shownArgs := args
 		shownDestination := resolved
-		if cfg.OutputMode != "local" {
+		if runtimeCfg.OutputMode != "local" {
 			shownArgs = redactArgs(args)
 			shownDestination = redactURL(resolved)
 		}
-		commandText := quoteCommand(append([]string{resolveExecutable(cfg.FFmpegPath)}, shownArgs...))
+		commandText := quoteCommand(append([]string{resolveExecutable(runtimeCfg.FFmpegPath)}, shownArgs...))
 		if err := cmd.Start(); err != nil {
 			if audioBridge != nil {
 				audioBridge.Close()
@@ -882,7 +883,9 @@ func (a *app) runLoop(gen int64) {
 			a.recordLaunchError(gen, err)
 			return
 		}
-		lowerProcessPriority(cmd.Process.Pid)
+		if !runtimeOptimized {
+			lowerProcessPriority(cmd.Process.Pid)
+		}
 
 		a.mu.Lock()
 		if !a.desired || a.generation != gen {
@@ -915,7 +918,7 @@ func (a *app) runLoop(gen int64) {
 		a.setOverlayStatus(true, "")
 		a.appendLog(fmt.Sprintf("Поток запущен, PID=%d, источник=%s, кодировщик=%s, назначение=%s", cmd.Process.Pid, plan.Description, encoderLabel(encoder), shownDestination))
 
-		capture := newCaptureSupervisor(a, cfg, plan)
+		capture := newCaptureSupervisor(a, runtimeCfg, plan, runtimeOptimized)
 		go capture.run(streamCtx)
 		writerDone := make(chan error, 1)
 		go func() { writerDone <- capture.writeFrames(streamCtx, videoIn) }()
@@ -981,7 +984,7 @@ func (a *app) runLoop(gen int64) {
 			delete(a.encoderFailures, encoder)
 		}
 		if reason == "" && err != nil && stillDesired {
-			reason = "Соединение с сервером было прервано"
+			reason = "RTSP-соединение было прервано"
 		}
 		if reason != "" && stillDesired {
 			now := time.Now()
@@ -1325,7 +1328,14 @@ func buildDesktopCaptureFilter(cfg Config, plan capturePlan) (string, error) {
 }
 
 func buildEncoderFFmpegDetailed(cfg Config, plan capturePlan, encoder, systemAudioURL, microphoneAudioURL string) (string, []string, capturePlan, error) {
+	runtimeFPS := cfg.FPS
 	normalizeConfig(&cfg)
+	// 10/12 FPS are internal emergency modes selected only by the adaptive
+	// performance controller. Keep normalizeConfig strict for persisted/UI
+	// settings, but allow those two runtime-only values in the encoder pipeline.
+	if runtimeFPS == 10 || runtimeFPS == 12 {
+		cfg.FPS = runtimeFPS
+	}
 	if encoder == "" || encoder == "auto" {
 		encoder = softwareEncoderForCodec(cfg.Codec)
 	}
