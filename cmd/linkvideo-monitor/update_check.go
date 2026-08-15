@@ -13,11 +13,11 @@ import (
 	"time"
 )
 
-// Can be embedded for production builds:
-// -ldflags="-X main.defaultUpdateManifestURL=https://updates.example/monitor.json"
-// A private GitHub repository should not be accessed with a token embedded in
-// the client. Publish this small manifest through a company API or proxy.
-var defaultUpdateManifestURL string
+// Public update manifest. It may still be overridden for special builds with:
+// -ldflags="-X main.defaultUpdateManifestURL=https://.../update-manifest.json"
+// The application never needs a GitHub token: only release binaries and this
+// small manifest are published in the public LinkVideo.Monitor.Updates repo.
+var defaultUpdateManifestURL = "https://raw.githubusercontent.com/WellJons/LinkVideo.Monitor.Updates/main/update-manifest.json"
 
 type updateManifest struct {
 	Version     string `json:"version"`

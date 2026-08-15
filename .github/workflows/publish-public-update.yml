@@ -1,0 +1,127 @@
+name: Publish public update
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish, for example v0.8.12-beta
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    env:
+      UPDATES_REPO: WellJons/LinkVideo.Monitor.Updates
+      GH_TOKEN: ${{ secrets.UPDATES_REPO_TOKEN }}
+    steps:
+      - name: Resolve source release tag
+        id: release
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="${{ inputs.tag }}"
+          else
+            TAG="${{ github.event.release.tag_name }}"
+          fi
+          if [ -z "$TAG" ]; then
+            echo "Release tag is empty" >&2
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          VERSION="${TAG#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check update repository token
+        shell: bash
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "Repository secret UPDATES_REPO_TOKEN is not configured." >&2
+            exit 1
+          fi
+
+      - name: Download installer and checksums from private release
+        env:
+          SOURCE_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          mkdir -p release-files
+          GH_TOKEN="$SOURCE_TOKEN" gh release download "${{ steps.release.outputs.tag }}" \
+            --repo "$GITHUB_REPOSITORY" \
+            --dir release-files \
+            --pattern 'LinkVideo.Monitor_*_Setup.exe' \
+            --pattern 'LinkVideo.Monitor_*_SHA256SUMS.txt'
+          ls -lah release-files
+          SETUP_FILE="$(find release-files -maxdepth 1 -type f -name 'LinkVideo.Monitor_*_Setup.exe' | head -n 1)"
+          if [ -z "$SETUP_FILE" ]; then
+            echo "Setup executable was not found in the source release." >&2
+            exit 1
+          fi
+          echo "SETUP_FILE=$SETUP_FILE" >> "$GITHUB_ENV"
+          echo "SETUP_NAME=$(basename "$SETUP_FILE")" >> "$GITHUB_ENV"
+
+      - name: Calculate installer SHA-256
+        shell: bash
+        run: |
+          SHA256="$(sha256sum "$SETUP_FILE" | awk '{print $1}')"
+          echo "SETUP_SHA256=$SHA256" >> "$GITHUB_ENV"
+          echo "$SHA256  $SETUP_NAME"
+
+      - name: Publish public release asset
+        shell: bash
+        run: |
+          TAG="${{ steps.release.outputs.tag }}"
+          if gh release view "$TAG" --repo "$UPDATES_REPO" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$SETUP_FILE" --repo "$UPDATES_REPO" --clobber
+          else
+            ARGS=(release create "$TAG" "$SETUP_FILE" --repo "$UPDATES_REPO" --title "LinkVideo Monitor ${{ steps.release.outputs.version }}" --notes "Публичный установщик LinkVideo Monitor. Исходный код хранится в приватном репозитории.")
+            if [[ "$TAG" == *-* ]]; then
+              ARGS+=(--prerelease)
+            fi
+            gh "${ARGS[@]}"
+          fi
+
+      - name: Update public manifest
+        shell: bash
+        run: |
+          TAG="${{ steps.release.outputs.tag }}"
+          VERSION="${{ steps.release.outputs.version }}"
+          DOWNLOAD_URL="https://github.com/$UPDATES_REPO/releases/download/$TAG/$SETUP_NAME"
+          rm -rf updates-repo
+          gh repo clone "$UPDATES_REPO" updates-repo
+          cd updates-repo
+          python3 - "$VERSION" "$DOWNLOAD_URL" "$SETUP_SHA256" <<'PY'
+          import json, sys
+          version, download_url, sha256 = sys.argv[1:4]
+          manifest = {
+              "version": version,
+              "download_url": download_url,
+              "sha256": sha256,
+              "notes": f"Доступна версия LinkVideo Monitor {version}.",
+              "mandatory": False,
+          }
+          with open("update-manifest.json", "w", encoding="utf-8") as f:
+              json.dump(manifest, f, ensure_ascii=False, indent=2)
+              f.write("\n")
+          PY
+          git config user.name "LinkVideo Release Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add update-manifest.json
+          if git diff --cached --quiet; then
+            echo "Manifest is already up to date."
+          else
+            git commit -m "Publish LinkVideo Monitor $VERSION"
+            git push origin HEAD:main
+          fi
+
+      - name: Verify public manifest
+        shell: bash
+        run: |
+          curl --fail --silent --show-error \
+            "https://raw.githubusercontent.com/$UPDATES_REPO/main/update-manifest.json" \
+            | python3 -m json.tool
