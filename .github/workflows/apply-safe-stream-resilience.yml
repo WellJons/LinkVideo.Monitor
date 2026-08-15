@@ -61,6 +61,28 @@ jobs:
               raise SystemExit('keepNormalStreamingPriority pattern not found')
           p.write_text(s.replace(old, new, 1), encoding='utf-8')
 
+          p = Path('cmd/linkvideo-monitor/main_test.go')
+          s = p.read_text(encoding='utf-8')
+          old = '[]string{"-thread_queue_size 8", "-f s16le",'
+          new = '[]string{"-thread_queue_size 32", "-f s16le",'
+          if old not in s:
+              raise SystemExit('main_test audio queue expectation not found')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8')
+
+          p = Path('cmd/linkvideo-monitor/runtime_encoder_fallback_test.go')
+          s = p.read_text(encoding='utf-8')
+          old = '''\tif keepNormalStreamingPriority("h264_qsv", false) {
+          \t\tt.Fatal("normal hardware path should remain eligible for below-normal priority")
+          \t}
+          '''
+          new = '''\tif !keepNormalStreamingPriority("h264_qsv", false) {
+          \t\tt.Fatal("hardware H.264 streaming must keep normal Windows priority")
+          \t}
+          '''
+          if old not in s:
+              raise SystemExit('hardware priority test expectation not found')
+          p.write_text(s.replace(old, new, 1), encoding='utf-8')
+
           Path('cmd/linkvideo-monitor/safe_stream_resilience_test.go').write_text(r'''package main
 
           import "testing"
@@ -114,7 +136,7 @@ jobs:
           ''', encoding='utf-8')
           PY
 
-          gofmt -w cmd/linkvideo-monitor/main.go cmd/linkvideo-monitor/runtime_encoder_fallback.go cmd/linkvideo-monitor/safe_stream_resilience_test.go
+          gofmt -w cmd/linkvideo-monitor/main.go cmd/linkvideo-monitor/main_test.go cmd/linkvideo-monitor/runtime_encoder_fallback.go cmd/linkvideo-monitor/runtime_encoder_fallback_test.go cmd/linkvideo-monitor/safe_stream_resilience_test.go
 
       - name: Verify
         shell: bash
