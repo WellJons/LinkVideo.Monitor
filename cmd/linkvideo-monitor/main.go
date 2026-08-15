@@ -1387,7 +1387,7 @@ func buildEncoderFFmpegDetailed(cfg Config, plan capturePlan, encoder, systemAud
 		systemInput = nextInput
 		nextInput++
 		args = append(args,
-			"-thread_queue_size", "8",
+			"-thread_queue_size", "32",
 			"-f", "s16le",
 			"-ar", "48000",
 			"-ac", "2",
@@ -1403,7 +1403,7 @@ func buildEncoderFFmpegDetailed(cfg Config, plan capturePlan, encoder, systemAud
 		microphoneInput = nextInput
 		nextInput++
 		args = append(args,
-			"-thread_queue_size", "16",
+			"-thread_queue_size", "32",
 			"-f", "s16le",
 			"-ar", "48000",
 			"-ac", "2",
@@ -1412,7 +1412,7 @@ func buildEncoderFFmpegDetailed(cfg Config, plan capturePlan, encoder, systemAud
 
 	videoInput := nextInput
 	args = append(args,
-		"-thread_queue_size", "2",
+		"-thread_queue_size", "4",
 		"-f", "rawvideo",
 		"-pixel_format", "bgra",
 		"-video_size", fmt.Sprintf("%dx%d", plan.OutputWidth, plan.OutputHeight),

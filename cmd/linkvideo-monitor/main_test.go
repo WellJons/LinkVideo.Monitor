@@ -159,7 +159,7 @@ func TestBuildLocalRTSPWithAAC(t *testing.T) {
 		t.Fatalf("dest=%q", dest)
 	}
 	joined := quoteCommand(args)
-	for _, part := range []string{"-thread_queue_size 8", "-f s16le", "-i tcp://127.0.0.1:12345", "-f rawvideo", "-pixel_format bgra", "-i pipe:0", "-c:a aac", "-profile:a aac_low", "asetpts=N/SR/TB", "-r 15", "-fps_mode cfr", "-f rtsp"} {
+	for _, part := range []string{"-thread_queue_size 32", "-f s16le", "-i tcp://127.0.0.1:12345", "-f rawvideo", "-pixel_format bgra", "-i pipe:0", "-c:a aac", "-profile:a aac_low", "asetpts=N/SR/TB", "-r 15", "-fps_mode cfr", "-f rtsp"} {
 		if !strings.Contains(joined, part) {
 			t.Fatalf("command does not contain %q: %s", part, joined)
 		}

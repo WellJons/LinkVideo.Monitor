@@ -38,8 +38,8 @@ func TestSoftwareEncoderKeepsNormalPriority(t *testing.T) {
 	if !keepNormalStreamingPriority("libx265", false) {
 		t.Fatal("software H.265 must keep normal Windows priority")
 	}
-	if keepNormalStreamingPriority("h264_qsv", false) {
-		t.Fatal("normal hardware path should remain eligible for below-normal priority")
+	if !keepNormalStreamingPriority("h264_qsv", false) {
+		t.Fatal("hardware H.264 streaming must keep normal Windows priority")
 	}
 	if !keepNormalStreamingPriority("h264_qsv", true) {
 		t.Fatal("fallback/optimized hardware path should keep normal priority")
