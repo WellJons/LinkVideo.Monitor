@@ -1,0 +1,101 @@
+name: Apply encoder fallback integration once
+
+on:
+  push:
+    branches:
+      - feature/encoder-fallback-cpu-optimization
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, '[encoder-fallback-applied]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature/encoder-fallback-cpu-optimization
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.20.x'
+
+      - name: Integrate runtime selector and capability probes
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          main = Path('cmd/linkvideo-monitor/main.go')
+          text = main.read_text(encoding='utf-8')
+
+          old = '''\t\tencoder := a.selectVideoEncoder(cfg, plan)\n\t\truntimeCfg, runtimeOptimized := a.runtimeConfigForPerformance(cfg, plan, encoder)'''
+          new = '''\t\truntimeCfg, encoder, runtimeOptimized := a.selectRuntimeEncoding(cfg, plan)\n\t\tnormalStreamingPriority := keepNormalStreamingPriority(encoder, runtimeOptimized)'''
+          assert old in text, 'runtime selector block not found'
+          text = text.replace(old, new, 1)
+
+          old = '''\t\tif !runtimeOptimized {\n\t\t\tlowerProcessPriority(cmd.Process.Pid)\n\t\t}'''
+          new = '''\t\tif !normalStreamingPriority {\n\t\t\tlowerProcessPriority(cmd.Process.Pid)\n\t\t}'''
+          assert old in text, 'encoder priority block not found'
+          text = text.replace(old, new, 1)
+
+          old = 'capture := newCaptureSupervisor(a, runtimeCfg, plan, runtimeOptimized)'
+          new = 'capture := newCaptureSupervisor(a, runtimeCfg, plan, normalStreamingPriority)'
+          assert old in text, 'capture priority call not found'
+          text = text.replace(old, new, 1)
+
+          old = '''filters := []string{fmt.Sprintf("[%d:v]setpts=N/(%d*TB),scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=bicubic+accurate_rnd+full_chroma_int,format=%s[vout]", videoInput, cfg.FPS, encoderPixelFormat)}'''
+          new = '''filters := []string{fmt.Sprintf("[%d:v]setpts=N/(%d*TB),format=%s[vout]", videoInput, cfg.FPS, encoderPixelFormat)}'''
+          assert old in text, 'redundant encoder scale filter not found'
+          text = text.replace(old, new, 1)
+
+          old = '''\t\t\t"-c:v", "libx265",\n\t\t\t"-preset", cfg.Preset,'''
+          new = '''\t\t\t"-c:v", "libx265",\n\t\t\t"-threads", "0",\n\t\t\t"-preset", cfg.Preset,'''
+          assert old in text, 'libx265 args block not found'
+          text = text.replace(old, new, 1)
+
+          old = '''\t\t\t"-c:v", "libx264",\n\t\t\t"-preset", cfg.Preset,'''
+          new = '''\t\t\t"-c:v", "libx264",\n\t\t\t"-threads", "0",\n\t\t\t"-preset", cfg.Preset,'''
+          assert old in text, 'libx264 args block not found'
+          text = text.replace(old, new, 1)
+
+          main.write_text(text, encoding='utf-8')
+
+          cap = Path('cmd/linkvideo-monitor/encoder_capabilities.go')
+          text = cap.read_text(encoding='utf-8')
+          old = '''\ta.mu.Lock()\n\tif !force && len(a.encoderCapabilities) > 0 && time.Since(a.encoderCapabilitiesAt) < 30*time.Minute {\n\t\tcached := append([]EncoderCapability(nil), a.encoderCapabilities...)\n\t\ta.mu.Unlock()\n\t\treturn cached\n\t}\n\tcfg := a.cfg\n\ta.mu.Unlock()'''
+          new = '''\ta.mu.Lock()\n\tcfg := a.cfg\n\ta.mu.Unlock()\n\t_ = force // benchmark results are cached by the exact runtime parameters instead'''
+          assert old in text, 'capability cache block not found'
+          text = text.replace(old, new, 1)
+
+          old = '''\tplan := capabilityProbePlan(cfg)'''
+          new = '''\tplan := capabilityProbePlan(cfg)\n\tif resolvedPlan, err := resolveCapturePlan(cfg); err == nil {\n\t\tplan = resolvedPlan\n\t}'''
+          assert old in text, 'capability plan line not found'
+          text = text.replace(old, new, 1)
+
+          old = 'if err := probeVideoEncoder(probeCfg, candidate.Name, plan); err != nil {'
+          new = 'if err := probeEncoderForCapabilities(probeCfg, plan, candidate.Name); err != nil {'
+          assert old in text, 'capability probe call not found'
+          text = text.replace(old, new, 1)
+          cap.write_text(text, encoding='utf-8')
+          PY
+
+      - name: Format, test and cross-build
+        shell: bash
+        run: |
+          gofmt -w cmd/linkvideo-monitor/runtime_encoder_fallback.go cmd/linkvideo-monitor/runtime_encoder_fallback_test.go cmd/linkvideo-monitor/main.go cmd/linkvideo-monitor/encoder_capabilities.go
+          go test ./cmd/linkvideo-monitor
+          go test -race ./cmd/linkvideo-monitor
+          go vet ./cmd/linkvideo-monitor
+          GOOS=windows GOARCH=amd64 GOAMD64=v1 go build -trimpath -o /tmp/LinkVideo.Monitor.exe ./cmd/linkvideo-monitor
+
+      - name: Commit integrated changes
+        shell: bash
+        run: |
+          git rm .github/workflows/apply-encoder-fallback-once.yml
+          git config user.name "LinkVideo Build Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add cmd/linkvideo-monitor/main.go cmd/linkvideo-monitor/encoder_capabilities.go cmd/linkvideo-monitor/runtime_encoder_fallback.go cmd/linkvideo-monitor/runtime_encoder_fallback_test.go
+          git commit -m "Add automatic encoder and codec fallback [encoder-fallback-applied]"
+          git push origin HEAD:feature/encoder-fallback-cpu-optimization
