@@ -14,6 +14,14 @@ func canonicalUpdateVersion(v string) string {
 	return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(v)), "v")
 }
 
+func updateAssetVersionBase(v string) string {
+	v = canonicalUpdateVersion(v)
+	if i := strings.IndexAny(v, "-+"); i >= 0 {
+		v = v[:i]
+	}
+	return v
+}
+
 func validateAutomaticUpdateDownload(downloadURL, sha256sum, targetVersion string) error {
 	u, err := url.Parse(strings.TrimSpace(downloadURL))
 	if err != nil || u.Scheme != "https" || !strings.EqualFold(u.Hostname(), "github.com") {
@@ -38,9 +46,9 @@ func validateAutomaticUpdateDownload(downloadURL, sha256sum, targetVersion strin
 	if err != nil {
 		return errors.New("некорректное имя установщика обновления")
 	}
-	lowerName := strings.ToLower(fileName)
-	if !strings.HasPrefix(lowerName, "linkvideo.monitor_") || !strings.HasSuffix(lowerName, "_setup.exe") {
-		return errors.New("манифест указывает не на официальный установщик LinkVideo Monitor")
+	expectedName := "linkvideo.monitor_" + updateAssetVersionBase(targetVersion) + "_setup.exe"
+	if strings.ToLower(fileName) != expectedName {
+		return errors.New("имя установщика не соответствует версии манифеста")
 	}
 	digest, err := hex.DecodeString(strings.TrimSpace(sha256sum))
 	if err != nil || len(digest) != 32 {
