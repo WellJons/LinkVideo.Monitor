@@ -13,6 +13,7 @@ func TestValidateAutomaticUpdateDownload(t *testing.T) {
 		"https://example.com/WellJons/LinkVideo.Monitor.Updates/releases/download/v0.8.13-beta/LinkVideo.Monitor_0.8.13_Setup.exe",
 		"https://github.com/WellJons/Other/releases/download/v0.8.13-beta/LinkVideo.Monitor_0.8.13_Setup.exe",
 		"https://github.com/WellJons/LinkVideo.Monitor.Updates/releases/download/v0.8.14-beta/LinkVideo.Monitor_0.8.14_Setup.exe",
+		"https://github.com/WellJons/LinkVideo.Monitor.Updates/releases/download/v0.8.13-beta/LinkVideo.Monitor_0.8.12_Setup.exe",
 		"https://github.com/WellJons/LinkVideo.Monitor.Updates/releases/download/v0.8.13-beta/not-an-installer.zip",
 	}
 	for _, raw := range bad {
@@ -22,5 +23,18 @@ func TestValidateAutomaticUpdateDownload(t *testing.T) {
 	}
 	if validateAutomaticUpdateDownload(good, "bad", "0.8.13-beta") == nil {
 		t.Fatal("invalid SHA-256 was accepted")
+	}
+}
+
+func TestUpdateAssetVersionBase(t *testing.T) {
+	cases := map[string]string{
+		"v0.8.13-beta":   "0.8.13",
+		"0.8.12.1":       "0.8.12.1",
+		"1.0.0+build.42": "1.0.0",
+	}
+	for input, want := range cases {
+		if got := updateAssetVersionBase(input); got != want {
+			t.Fatalf("updateAssetVersionBase(%q)=%q want %q", input, got, want)
+		}
 	}
 }
