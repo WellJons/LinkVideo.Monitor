@@ -79,12 +79,20 @@ jobs:
           assert old in text, 'capability probe call not found'
           text = text.replace(old, new, 1)
           cap.write_text(text, encoding='utf-8')
+
+          test = Path('cmd/linkvideo-monitor/main_test.go')
+          text = test.read_text(encoding='utf-8')
+          old = '''\tif !strings.Contains(joined, "scale=trunc(iw/2)*2:trunc(ih/2)*2") {\n\t\tt.Fatalf("final even-dimension guard is missing: %s", joined)\n\t}'''
+          new = '''\tif strings.Contains(joined, "scale=trunc(iw/2)*2:trunc(ih/2)*2") {\n\t\tt.Fatalf("redundant no-op scale filter is still present: %s", joined)\n\t}\n\tif !strings.Contains(joined, "format=yuv420p") {\n\t\tt.Fatalf("encoder pixel-format conversion is missing: %s", joined)\n\t}'''
+          assert old in text, 'old even-dimension filter assertion not found'
+          text = text.replace(old, new, 1)
+          test.write_text(text, encoding='utf-8')
           PY
 
       - name: Format, test and cross-build
         shell: bash
         run: |
-          gofmt -w cmd/linkvideo-monitor/runtime_encoder_fallback.go cmd/linkvideo-monitor/runtime_encoder_fallback_test.go cmd/linkvideo-monitor/main.go cmd/linkvideo-monitor/encoder_capabilities.go
+          gofmt -w cmd/linkvideo-monitor/runtime_encoder_fallback.go cmd/linkvideo-monitor/runtime_encoder_fallback_test.go cmd/linkvideo-monitor/main.go cmd/linkvideo-monitor/main_test.go cmd/linkvideo-monitor/encoder_capabilities.go
           go test ./cmd/linkvideo-monitor
           go test -race ./cmd/linkvideo-monitor
           go vet ./cmd/linkvideo-monitor
@@ -96,6 +104,6 @@ jobs:
           git rm .github/workflows/apply-encoder-fallback-once.yml
           git config user.name "LinkVideo Build Bot"
           git config user.email "actions@users.noreply.github.com"
-          git add cmd/linkvideo-monitor/main.go cmd/linkvideo-monitor/encoder_capabilities.go cmd/linkvideo-monitor/runtime_encoder_fallback.go cmd/linkvideo-monitor/runtime_encoder_fallback_test.go
+          git add cmd/linkvideo-monitor/main.go cmd/linkvideo-monitor/main_test.go cmd/linkvideo-monitor/encoder_capabilities.go cmd/linkvideo-monitor/runtime_encoder_fallback.go cmd/linkvideo-monitor/runtime_encoder_fallback_test.go
           git commit -m "Add automatic encoder and codec fallback [encoder-fallback-applied]"
           git push origin HEAD:feature/encoder-fallback-cpu-optimization
