@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,12 +20,20 @@ import (
 )
 
 const (
-	autoUpdateInitialDelay = 90 * time.Second
-	autoUpdateInterval     = 6 * time.Hour
-	autoUpdateRetryBase    = 5 * time.Minute
-	autoUpdateRetryMax     = 1 * time.Hour
-	autoUpdateMaxBytes     = int64(256 << 20)
+	autoUpdateInitialDelay     = 90 * time.Second
+	autoUpdateInterval         = 6 * time.Hour
+	autoUpdateRetryBase        = 5 * time.Minute
+	autoUpdateRetryMax         = 1 * time.Hour
+	autoUpdateInstallRetryBase = 30 * time.Minute
+	autoUpdateInstallRetryMax  = 6 * time.Hour
+	autoUpdateMaxBytes         = int64(256 << 20)
 )
+
+type automaticUpdateFailureMarker struct {
+	Version  string `json:"version"`
+	Failures int    `json:"failures"`
+	AtUnix   int64  `json:"at_unix"`
+}
 
 func init() {
 	if len(os.Args) > 1 && os.Args[1] == "--uac-service" {
@@ -46,6 +55,48 @@ func automaticUpdateRetryDelay(failures int) time.Duration {
 	return delay
 }
 
+func automaticUpdateFailureMarkerPath() string {
+	base := strings.TrimSpace(os.Getenv("PROGRAMDATA"))
+	if base == "" {
+		return ""
+	}
+	return filepath.Join(base, "LinkVideo.Monitor", "update-failure.json")
+}
+
+func failedInstallRetryRemaining(targetVersion string, mandatory bool) time.Duration {
+	path := automaticUpdateFailureMarkerPath()
+	if path == "" {
+		return 0
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	var marker automaticUpdateFailureMarker
+	if json.Unmarshal(data, &marker) != nil || marker.Failures < 1 || marker.AtUnix <= 0 || canonicalUpdateVersion(marker.Version) != canonicalUpdateVersion(targetVersion) {
+		return 0
+	}
+	delay := autoUpdateInstallRetryBase
+	for i := 1; i < marker.Failures && delay < autoUpdateInstallRetryMax; i++ {
+		delay *= 2
+	}
+	maxDelay := autoUpdateInstallRetryMax
+	if mandatory {
+		// Critical fixes are retried sooner, but still never in a tight loop that
+		// repeatedly interrupts an otherwise working old version.
+		maxDelay = time.Hour
+	}
+	if delay > maxDelay {
+		delay = maxDelay
+	}
+	until := time.Unix(marker.AtUnix, 0).Add(delay)
+	remaining := time.Until(until)
+	if remaining <= 0 {
+		return 0
+	}
+	return remaining
+}
+
 func runServiceAutomaticUpdates() {
 	timer := time.NewTimer(autoUpdateInitialDelay)
 	defer timer.Stop()
@@ -55,7 +106,7 @@ func runServiceAutomaticUpdates() {
 		case <-serviceStopCh:
 			return
 		case <-timer.C:
-			launched, err := checkDownloadAndLaunchAutomaticUpdate()
+			launched, retryAfter, err := checkDownloadAndLaunchAutomaticUpdate()
 			if err != nil {
 				failures++
 				retry := automaticUpdateRetryDelay(failures)
@@ -69,36 +120,44 @@ func runServiceAutomaticUpdates() {
 				serviceStopOnce.Do(func() { close(serviceStopCh) })
 				return
 			}
+			if retryAfter > 0 {
+				serviceLog(fmt.Sprintf("automatic update: previous install of this version failed; retry in %s", retryAfter.Round(time.Second)))
+				timer.Reset(retryAfter)
+				continue
+			}
 			timer.Reset(autoUpdateInterval)
 		}
 	}
 }
 
-func checkDownloadAndLaunchAutomaticUpdate() (bool, error) {
+func checkDownloadAndLaunchAutomaticUpdate() (bool, time.Duration, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	result, err := checkForUpdates(ctx)
 	cancel()
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 	if !result.Available {
 		cleanupStaleUpdateInstallers()
-		return false, nil
+		return false, 0, nil
 	}
 	if err := validateAutomaticUpdateDownload(result.DownloadURL, result.SHA256, result.LatestVersion); err != nil {
-		return false, err
+		return false, 0, err
+	}
+	if remaining := failedInstallRetryRemaining(result.LatestVersion, result.Mandatory); remaining > 0 {
+		return false, remaining, nil
 	}
 	installerPath, err := downloadVerifiedUpdateInstaller(result)
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
-	cmd := exec.Command(installerPath, "--silent-update-elevated")
+	cmd := exec.Command(installerPath, "--silent-update-elevated", result.LatestVersion)
 	hideChildWindow(cmd)
 	if err := cmd.Start(); err != nil {
-		return false, fmt.Errorf("не удалось запустить установщик %s: %w", result.LatestVersion, err)
+		return false, 0, fmt.Errorf("не удалось запустить установщик %s: %w", result.LatestVersion, err)
 	}
 	serviceLog(fmt.Sprintf("automatic update: %s -> %s verified and launched", appVersion, result.LatestVersion))
-	return true, nil
+	return true, 0, nil
 }
 
 func automaticUpdateDirectory() (string, error) {
