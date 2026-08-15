@@ -15,7 +15,7 @@ import (
 
 const (
 	productName = "LinkVideo Monitor"
-	version     = "0.8.11"
+	version     = "0.8.12"
 
 	clientWidth  = 900
 	clientHeight = 580

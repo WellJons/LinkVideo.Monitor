@@ -216,7 +216,7 @@ func (a *app) processFFmpegLine(prefix, line string) bool {
 	if strings.Contains(lower, "failed to capture image") || strings.Contains(lower, "error during demuxing") {
 		a.markFatalCapture("Windows временно заблокировала захват экрана")
 	} else if strings.Contains(lower, "failed reading rtsp data") || strings.Contains(lower, "broken pipe") {
-		a.markPendingRestart("Сервер закрыл RTSP-соединение", false)
+		a.markPendingRestart("RTSP-соединение разорвано (Broken pipe)", false)
 	}
 	return false
 }
