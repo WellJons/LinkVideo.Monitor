@@ -51,6 +51,39 @@ jobs:
             exit 1
           fi
 
+      - name: Check out exact release source
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.release.outputs.tag }}
+          fetch-depth: 1
+          lfs: false
+
+      - name: Validate source version metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "${{ steps.release.outputs.version }}" <<'PY'
+          import pathlib, re, sys
+          expected = sys.argv[1]
+          base = expected.split('-', 1)[0].split('+', 1)[0]
+
+          app_text = pathlib.Path('cmd/linkvideo-monitor/main.go').read_text(encoding='utf-8')
+          match = re.search(r'appVersion\s*=\s*"([^"]+)"', app_text)
+          if not match or match.group(1) != expected:
+              raise SystemExit(f'appVersion mismatch: source={match.group(1) if match else None!r}, release={expected!r}')
+
+          installer_text = pathlib.Path('installer/main.go').read_text(encoding='utf-8')
+          match = re.search(r'version\s*=\s*"([^"]+)"', installer_text)
+          if not match or match.group(1) != base:
+              raise SystemExit(f'installer version mismatch: source={match.group(1) if match else None!r}, expected={base!r}')
+
+          build_text = pathlib.Path('scripts/windows/build-installer.cmd').read_text(encoding='utf-8')
+          expected_name = f'LinkVideo.Monitor_{base}_Setup.exe'
+          if expected_name not in build_text:
+              raise SystemExit(f'build-installer.cmd does not build {expected_name}')
+          print(f'Version metadata verified: app={expected}, installer={base}, asset={expected_name}')
+          PY
+
       - name: Download installer and checksums from private release
         env:
           SOURCE_TOKEN: ${{ github.token }}
