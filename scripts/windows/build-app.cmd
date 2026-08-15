@@ -14,6 +14,7 @@ set "REMOTE_LDFLAGS="
 if defined LINKVIDEO_REMOTE_API_URL set "REMOTE_LDFLAGS=%REMOTE_LDFLAGS% -X main.defaultRemoteAPIURL=%LINKVIDEO_REMOTE_API_URL%"
 if defined LINKVIDEO_REMOTE_API_KEY set "REMOTE_LDFLAGS=%REMOTE_LDFLAGS% -X main.defaultRemoteAPIKey=%LINKVIDEO_REMOTE_API_KEY%"
 if defined LINKVIDEO_ADMIN_PASSWORD_SHA256 set "REMOTE_LDFLAGS=%REMOTE_LDFLAGS% -X main.embeddedAdminPasswordSHA256=%LINKVIDEO_ADMIN_PASSWORD_SHA256%"
+if defined LINKVIDEO_UPDATE_MANIFEST_URL set "REMOTE_LDFLAGS=%REMOTE_LDFLAGS% -X main.defaultUpdateManifestURL=%LINKVIDEO_UPDATE_MANIFEST_URL%"
 
 echo [1/3] Tests...
 go test ./cmd/linkvideo-monitor
@@ -34,4 +35,5 @@ if not errorlevel 1 (
 
 echo Built: %BUILD%\LinkVideo.Monitor.exe
 if not defined LINKVIDEO_REMOTE_API_URL echo WARNING: Remote API URL is not embedded; remote control will remain disabled.
+if not defined LINKVIDEO_UPDATE_MANIFEST_URL echo WARNING: Update manifest URL is not embedded; update checks will remain disabled.
 endlocal
