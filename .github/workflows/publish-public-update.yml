@@ -183,10 +183,11 @@ jobs:
           curl --fail --silent --show-error \
             -H 'Cache-Control: no-cache' \
             "https://raw.githubusercontent.com/$UPDATES_REPO/main/update-manifest.json?ts=$(date +%s)" \
-            | python3 - "$SETUP_SHA256" "${{ steps.release.outputs.version }}" <<'PY'
-          import json, sys
-          expected_sha, expected_version = sys.argv[1:3]
-          data = json.load(sys.stdin)
+            -o public-manifest.json
+          python3 - public-manifest.json "$SETUP_SHA256" "${{ steps.release.outputs.version }}" <<'PY'
+          import json, pathlib, sys
+          manifest_path, expected_sha, expected_version = sys.argv[1:4]
+          data = json.loads(pathlib.Path(manifest_path).read_text(encoding='utf-8'))
           if data.get("version") != expected_version:
               raise SystemExit(f"manifest version mismatch: {data.get('version')!r}")
           if data.get("sha256", "").lower() != expected_sha.lower():
