@@ -359,7 +359,12 @@ func probeEncoderForCapabilities(cfg Config, plan capturePlan, encoder string) e
 }
 
 func keepNormalStreamingPriority(encoder string, optimized bool) bool {
-	// Software encoding needs fair access to all CPU cores. Hardware encoders can
-	// stay below-normal in the normal case because most of their work is on GPU.
-	return optimized || !isHardwareEncoder(encoder)
+	// Keep the whole streaming pipeline at normal priority. Even when video is
+	// encoded in hardware, this FFmpeg process still performs BGRA->NV12 colour
+	// conversion, audio work, muxing and network I/O on the CPU. Demoting the
+	// process can starve those threads on a busy/low-end PC and create avoidable
+	// stalls before the encoder or RTSP socket.
+	_ = encoder
+	_ = optimized
+	return true
 }
