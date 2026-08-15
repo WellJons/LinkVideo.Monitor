@@ -926,7 +926,7 @@ func (a *app) runLoop(gen int64) {
 		var wg sync.WaitGroup
 		wg.Add(2)
 		go func() { defer wg.Done(); a.scanPipe("ffmpeg", stderr) }()
-		go func() { defer wg.Done(); a.scanPipe("ffmpeg", stdout) }()
+		go func() { defer wg.Done(); a.scanPipe("ffmpeg-progress", stdout) }()
 
 		err = cmd.Wait()
 		cancelStream()
@@ -1017,7 +1017,7 @@ func (a *app) scanPipe(prefix string, r io.Reader) {
 	s.Buffer(buf, 2*1024*1024)
 	for s.Scan() {
 		line := s.Text()
-		if prefix == "ffmpeg" && a.processFFmpegLine(prefix, line) {
+		if (prefix == "ffmpeg" || prefix == "ffmpeg-progress") && a.processFFmpegLine(prefix, line) {
 			continue
 		}
 		a.appendLog(prefix + ": " + line)
@@ -1363,7 +1363,7 @@ func buildEncoderFFmpegDetailed(cfg Config, plan capturePlan, encoder, systemAud
 		return "", nil, capturePlan{}, err
 	}
 
-	args := []string{"-hide_banner", "-loglevel", "info", "-fflags", "+genpts"}
+	args := []string{"-hide_banner", "-loglevel", "info", "-nostats", "-stats_period", "1", "-progress", "pipe:1", "-fflags", "+genpts"}
 	nextInput := 0
 	systemInput := -1
 	microphoneInput := -1
