@@ -4,12 +4,25 @@ import (
 	"encoding/hex"
 	"errors"
 	"net/url"
+	"path"
 	"strings"
 )
 
 const publicUpdateDownloadPrefix = "/WellJons/LinkVideo.Monitor.Updates/releases/download/"
 
-func validateAutomaticUpdateDownload(downloadURL, sha256sum string) error {
+func canonicalUpdateVersion(v string) string {
+	return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(v)), "v")
+}
+
+func updateAssetVersionBase(v string) string {
+	v = canonicalUpdateVersion(v)
+	if i := strings.IndexAny(v, "-+"); i >= 0 {
+		v = v[:i]
+	}
+	return v
+}
+
+func validateAutomaticUpdateDownload(downloadURL, sha256sum, targetVersion string) error {
 	u, err := url.Parse(strings.TrimSpace(downloadURL))
 	if err != nil || u.Scheme != "https" || !strings.EqualFold(u.Hostname(), "github.com") {
 		return errors.New("автоматическое обновление разрешено только через GitHub LinkVideo.Monitor.Updates")
@@ -19,6 +32,23 @@ func validateAutomaticUpdateDownload(downloadURL, sha256sum string) error {
 	}
 	if u.RawQuery != "" || u.Fragment != "" {
 		return errors.New("ссылка обновления содержит недопустимые параметры")
+	}
+	remainder := strings.TrimPrefix(u.EscapedPath(), publicUpdateDownloadPrefix)
+	parts := strings.Split(remainder, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return errors.New("ссылка обновления имеет некорректный путь release")
+	}
+	tag, err := url.PathUnescape(parts[0])
+	if err != nil || canonicalUpdateVersion(tag) != canonicalUpdateVersion(targetVersion) {
+		return errors.New("версия release в ссылке не совпадает с версией манифеста")
+	}
+	fileName, err := url.PathUnescape(path.Base(parts[1]))
+	if err != nil {
+		return errors.New("некорректное имя установщика обновления")
+	}
+	expectedName := "linkvideo.monitor_" + updateAssetVersionBase(targetVersion) + "_setup.exe"
+	if strings.ToLower(fileName) != expectedName {
+		return errors.New("имя установщика не соответствует версии манифеста")
 	}
 	digest, err := hex.DecodeString(strings.TrimSpace(sha256sum))
 	if err != nil || len(digest) != 32 {

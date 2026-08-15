@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -19,63 +20,146 @@ import (
 )
 
 const (
-	autoUpdateInitialDelay = 90 * time.Second
-	autoUpdateInterval     = 6 * time.Hour
-	autoUpdateMaxBytes     = int64(256 << 20)
+	autoUpdateInitialDelay     = 90 * time.Second
+	autoUpdateInterval         = 6 * time.Hour
+	autoUpdateRetryBase        = 5 * time.Minute
+	autoUpdateRetryMax         = 1 * time.Hour
+	autoUpdateInstallRetryBase = 30 * time.Minute
+	autoUpdateInstallRetryMax  = 6 * time.Hour
+	autoUpdateMaxBytes         = int64(256 << 20)
 )
+
+type automaticUpdateFailureMarker struct {
+	Version  string `json:"version"`
+	Failures int    `json:"failures"`
+	AtUnix   int64  `json:"at_unix"`
+}
 
 func init() {
 	if len(os.Args) > 1 && os.Args[1] == "--uac-service" {
 		go runServiceAutomaticUpdates()
 	}
 }
+
+func automaticUpdateRetryDelay(failures int) time.Duration {
+	if failures <= 0 {
+		return autoUpdateInterval
+	}
+	delay := autoUpdateRetryBase
+	for i := 1; i < failures && delay < autoUpdateRetryMax; i++ {
+		delay *= 2
+	}
+	if delay > autoUpdateRetryMax {
+		delay = autoUpdateRetryMax
+	}
+	return delay
+}
+
+func automaticUpdateFailureMarkerPath() string {
+	base := strings.TrimSpace(os.Getenv("PROGRAMDATA"))
+	if base == "" {
+		return ""
+	}
+	return filepath.Join(base, "LinkVideo.Monitor", "update-failure.json")
+}
+
+func failedInstallRetryRemaining(targetVersion string, mandatory bool) time.Duration {
+	path := automaticUpdateFailureMarkerPath()
+	if path == "" {
+		return 0
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	var marker automaticUpdateFailureMarker
+	if json.Unmarshal(data, &marker) != nil || marker.Failures < 1 || marker.AtUnix <= 0 || canonicalUpdateVersion(marker.Version) != canonicalUpdateVersion(targetVersion) {
+		return 0
+	}
+	delay := autoUpdateInstallRetryBase
+	for i := 1; i < marker.Failures && delay < autoUpdateInstallRetryMax; i++ {
+		delay *= 2
+	}
+	maxDelay := autoUpdateInstallRetryMax
+	if mandatory {
+		// Critical fixes are retried sooner, but still never in a tight loop that
+		// repeatedly interrupts an otherwise working old version.
+		maxDelay = time.Hour
+	}
+	if delay > maxDelay {
+		delay = maxDelay
+	}
+	until := time.Unix(marker.AtUnix, 0).Add(delay)
+	remaining := time.Until(until)
+	if remaining <= 0 {
+		return 0
+	}
+	return remaining
+}
+
 func runServiceAutomaticUpdates() {
 	timer := time.NewTimer(autoUpdateInitialDelay)
 	defer timer.Stop()
+	failures := 0
 	for {
 		select {
 		case <-serviceStopCh:
 			return
 		case <-timer.C:
-			launched, err := checkDownloadAndLaunchAutomaticUpdate()
+			launched, retryAfter, err := checkDownloadAndLaunchAutomaticUpdate()
 			if err != nil {
-				serviceLog("automatic update: " + err.Error())
+				failures++
+				retry := automaticUpdateRetryDelay(failures)
+				serviceLog(fmt.Sprintf("automatic update: %v; retry in %s", err, retry.Round(time.Second)))
+				timer.Reset(retry)
+				continue
 			}
+			failures = 0
 			if launched {
 				serviceLog("automatic update installer started; stopping service for upgrade")
 				serviceStopOnce.Do(func() { close(serviceStopCh) })
 				return
 			}
+			if retryAfter > 0 {
+				serviceLog(fmt.Sprintf("automatic update: previous install of this version failed; retry in %s", retryAfter.Round(time.Second)))
+				timer.Reset(retryAfter)
+				continue
+			}
 			timer.Reset(autoUpdateInterval)
 		}
 	}
 }
-func checkDownloadAndLaunchAutomaticUpdate() (bool, error) {
+
+func checkDownloadAndLaunchAutomaticUpdate() (bool, time.Duration, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	result, err := checkForUpdates(ctx)
 	cancel()
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
 	if !result.Available {
 		cleanupStaleUpdateInstallers()
-		return false, nil
+		return false, 0, nil
 	}
-	if err := validateAutomaticUpdateDownload(result.DownloadURL, result.SHA256); err != nil {
-		return false, err
+	if err := validateAutomaticUpdateDownload(result.DownloadURL, result.SHA256, result.LatestVersion); err != nil {
+		return false, 0, err
+	}
+	if remaining := failedInstallRetryRemaining(result.LatestVersion, result.Mandatory); remaining > 0 {
+		return false, remaining, nil
 	}
 	installerPath, err := downloadVerifiedUpdateInstaller(result)
 	if err != nil {
-		return false, err
+		return false, 0, err
 	}
-	cmd := exec.Command(installerPath, "--silent-update-elevated")
+	cmd := exec.Command(installerPath, "--silent-update-elevated", result.LatestVersion)
 	hideChildWindow(cmd)
 	if err := cmd.Start(); err != nil {
-		return false, fmt.Errorf("не удалось запустить установщик %s: %w", result.LatestVersion, err)
+		return false, 0, fmt.Errorf("не удалось запустить установщик %s: %w", result.LatestVersion, err)
 	}
 	serviceLog(fmt.Sprintf("automatic update: %s -> %s verified and launched", appVersion, result.LatestVersion))
-	return true, nil
+	return true, 0, nil
 }
+
 func automaticUpdateDirectory() (string, error) {
 	appPath, err := loadInstalledAppPath()
 	if err != nil {
@@ -88,6 +172,7 @@ func automaticUpdateDirectory() (string, error) {
 	}
 	return dir, nil
 }
+
 func downloadVerifiedUpdateInstaller(result updateCheckResult) (string, error) {
 	u, err := url.Parse(result.DownloadURL)
 	if err != nil {
@@ -117,6 +202,7 @@ func downloadVerifiedUpdateInstaller(result updateCheckResult) (string, error) {
 		return "", err
 	}
 	req.Header.Set("User-Agent", "LinkVideo-Monitor-Updater/"+appVersion)
+	req.Header.Set("Accept", "application/octet-stream")
 	client := &http.Client{Timeout: 10 * time.Minute}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -125,6 +211,9 @@ func downloadVerifiedUpdateInstaller(result updateCheckResult) (string, error) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("сервер установщика вернул HTTP %d", resp.StatusCode)
+	}
+	if resp.Request == nil || resp.Request.URL == nil || resp.Request.URL.Scheme != "https" {
+		return "", errors.New("сервер обновлений выполнил небезопасное перенаправление")
 	}
 	if resp.ContentLength > autoUpdateMaxBytes {
 		return "", errors.New("установщик обновления превышает допустимый размер")
@@ -165,6 +254,7 @@ func downloadVerifiedUpdateInstaller(result updateCheckResult) (string, error) {
 	}
 	return finalPath, nil
 }
+
 func cleanupStaleUpdateInstallers() {
 	dir, err := automaticUpdateDirectory()
 	if err != nil {
