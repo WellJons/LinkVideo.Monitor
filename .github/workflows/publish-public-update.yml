@@ -74,8 +74,17 @@ jobs:
             echo "Expected exactly one SHA256SUMS file, found ${#SUMS[@]}." >&2
             exit 1
           fi
+          SETUP_NAME="$(basename "${SETUPS[0]}")"
+          VERSION_BASE="${{ steps.release.outputs.version }}"
+          VERSION_BASE="${VERSION_BASE%%-*}"
+          VERSION_BASE="${VERSION_BASE%%+*}"
+          EXPECTED_SETUP_NAME="LinkVideo.Monitor_${VERSION_BASE}_Setup.exe"
+          if [ "$SETUP_NAME" != "$EXPECTED_SETUP_NAME" ]; then
+            echo "Setup name $SETUP_NAME does not match release version; expected $EXPECTED_SETUP_NAME." >&2
+            exit 1
+          fi
           echo "SETUP_FILE=${SETUPS[0]}" >> "$GITHUB_ENV"
-          echo "SETUP_NAME=$(basename "${SETUPS[0]}")" >> "$GITHUB_ENV"
+          echo "SETUP_NAME=$SETUP_NAME" >> "$GITHUB_ENV"
           echo "CHECKSUM_FILE=${SUMS[0]}" >> "$GITHUB_ENV"
           ls -lah release-files
 
@@ -107,13 +116,24 @@ jobs:
           echo "SETUP_SHA256=$ACTUAL" >> "$GITHUB_ENV"
           echo "$ACTUAL  $SETUP_NAME"
 
-      - name: Publish public release asset
+      - name: Publish immutable public release asset
         shell: bash
         run: |
           set -euo pipefail
           TAG="${{ steps.release.outputs.tag }}"
           if gh release view "$TAG" --repo "$UPDATES_REPO" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$SETUP_FILE" --repo "$UPDATES_REPO" --clobber
+            rm -rf existing-public
+            mkdir existing-public
+            if gh release download "$TAG" --repo "$UPDATES_REPO" --dir existing-public --pattern "$SETUP_NAME" >/dev/null 2>&1; then
+              EXISTING_SHA="$(sha256sum "existing-public/$SETUP_NAME" | awk '{print $1}')"
+              if [ "$EXISTING_SHA" != "$SETUP_SHA256" ]; then
+                echo "Public release $TAG already contains different bytes for $SETUP_NAME. Publish a new version/tag instead of replacing an existing update." >&2
+                exit 1
+              fi
+              echo "Public release asset already exists with the expected checksum; reusing it."
+            else
+              gh release upload "$TAG" "$SETUP_FILE" --repo "$UPDATES_REPO"
+            fi
           else
             ARGS=(release create "$TAG" "$SETUP_FILE" --repo "$UPDATES_REPO" --title "LinkVideo Monitor ${{ steps.release.outputs.version }}" --notes "Публичный установщик LinkVideo Monitor. Исходный код хранится в приватном репозитории.")
             if [[ "$TAG" == *-* ]]; then
