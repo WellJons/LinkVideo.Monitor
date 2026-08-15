@@ -779,8 +779,8 @@ func (a *app) runLoop(gen int64) {
 			a.recordLaunchError(gen, err)
 			return
 		}
-		encoder := a.selectVideoEncoder(cfg, plan)
-		runtimeCfg, runtimeOptimized := a.runtimeConfigForPerformance(cfg, plan, encoder)
+		runtimeCfg, encoder, runtimeOptimized := a.selectRuntimeEncoding(cfg, plan)
+		normalStreamingPriority := keepNormalStreamingPriority(encoder, runtimeOptimized)
 		a.mu.Lock()
 		currentGeneration := a.desired && a.generation == gen
 		a.mu.Unlock()
@@ -883,7 +883,7 @@ func (a *app) runLoop(gen int64) {
 			a.recordLaunchError(gen, err)
 			return
 		}
-		if !runtimeOptimized {
+		if !normalStreamingPriority {
 			lowerProcessPriority(cmd.Process.Pid)
 		}
 
@@ -918,7 +918,7 @@ func (a *app) runLoop(gen int64) {
 		a.setOverlayStatus(true, "")
 		a.appendLog(fmt.Sprintf("Поток запущен, PID=%d, источник=%s, кодировщик=%s, назначение=%s", cmd.Process.Pid, plan.Description, encoderLabel(encoder), shownDestination))
 
-		capture := newCaptureSupervisor(a, runtimeCfg, plan, runtimeOptimized)
+		capture := newCaptureSupervisor(a, runtimeCfg, plan, normalStreamingPriority)
 		go capture.run(streamCtx)
 		writerDone := make(chan error, 1)
 		go func() { writerDone <- capture.writeFrames(streamCtx, videoIn) }()
@@ -1410,7 +1410,7 @@ func buildEncoderFFmpegDetailed(cfg Config, plan capturePlan, encoder, systemAud
 	if isHardwareEncoder(encoder) {
 		encoderPixelFormat = "nv12"
 	}
-	filters := []string{fmt.Sprintf("[%d:v]setpts=N/(%d*TB),scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=bicubic+accurate_rnd+full_chroma_int,format=%s[vout]", videoInput, cfg.FPS, encoderPixelFormat)}
+	filters := []string{fmt.Sprintf("[%d:v]setpts=N/(%d*TB),format=%s[vout]", videoInput, cfg.FPS, encoderPixelFormat)}
 	hasAudio := systemInput >= 0 || microphoneInput >= 0
 	if systemInput >= 0 {
 		systemFilter := "aresample=async=1:first_pts=0,asetpts=N/SR/TB"
@@ -1465,6 +1465,7 @@ func buildEncoderFFmpegDetailed(cfg Config, plan capturePlan, encoder, systemAud
 		}
 		args = append(args,
 			"-c:v", "libx265",
+			"-threads", "0",
 			"-preset", cfg.Preset,
 			"-tune", "zerolatency",
 			"-x265-params", x265Params,
@@ -1476,6 +1477,7 @@ func buildEncoderFFmpegDetailed(cfg Config, plan capturePlan, encoder, systemAud
 		)
 		args = append(args,
 			"-c:v", "libx264",
+			"-threads", "0",
 			"-preset", cfg.Preset,
 			"-tune", "zerolatency",
 			"-x264-params", x264Params,

@@ -709,8 +709,11 @@ func TestOddMultiMonitorDimensionsAreNormalizedForH264(t *testing.T) {
 	if !strings.Contains(joined, "-video_size 3840x1080") {
 		t.Fatalf("encoder did not receive an even frame size: %s", joined)
 	}
-	if !strings.Contains(joined, "scale=trunc(iw/2)*2:trunc(ih/2)*2") {
-		t.Fatalf("final even-dimension guard is missing: %s", joined)
+	if strings.Contains(joined, "scale=trunc(iw/2)*2:trunc(ih/2)*2") {
+		t.Fatalf("redundant no-op scale filter is still present: %s", joined)
+	}
+	if !strings.Contains(joined, "format=yuv420p") {
+		t.Fatalf("encoder pixel-format conversion is missing: %s", joined)
 	}
 }
 

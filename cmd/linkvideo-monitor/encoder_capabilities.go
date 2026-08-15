@@ -78,15 +78,14 @@ func capabilityProbePlan(cfg Config) capturePlan {
 
 func (a *app) getEncoderCapabilities(force bool) []EncoderCapability {
 	a.mu.Lock()
-	if !force && len(a.encoderCapabilities) > 0 && time.Since(a.encoderCapabilitiesAt) < 30*time.Minute {
-		cached := append([]EncoderCapability(nil), a.encoderCapabilities...)
-		a.mu.Unlock()
-		return cached
-	}
 	cfg := a.cfg
 	a.mu.Unlock()
+	_ = force // benchmark results are cached by the exact runtime parameters instead
 
 	plan := capabilityProbePlan(cfg)
+	if resolvedPlan, err := resolveCapturePlan(cfg); err == nil {
+		plan = resolvedPlan
+	}
 	adapters := strings.Join(videoAdapterNames(), "\n")
 	candidates := append(encoderCandidatesForCodec("h264"), encoderCandidatesForCodec("h265")...)
 	results := make([]EncoderCapability, len(candidates))
@@ -107,7 +106,7 @@ func (a *app) getEncoderCapabilities(force bool) []EncoderCapability {
 			if probeCfg.FPS < 1 {
 				probeCfg.FPS = 15
 			}
-			if err := probeVideoEncoder(probeCfg, candidate.Name, plan); err != nil {
+			if err := probeEncoderForCapabilities(probeCfg, plan, candidate.Name); err != nil {
 				results[i].Reason = err.Error()
 				return
 			}
