@@ -746,6 +746,7 @@ func (a *app) watchCaptureTarget(_ *exec.Cmd, _ Config, _ capturePlan) {
 
 func (a *app) runLoop(gen int64) {
 	first := true
+	transportFailures := 0
 	for {
 		a.mu.Lock()
 		if !a.desired || a.generation != gen {
@@ -779,8 +780,8 @@ func (a *app) runLoop(gen int64) {
 			a.recordLaunchError(gen, err)
 			return
 		}
-		encoder := a.selectVideoEncoder(cfg, plan)
-		runtimeCfg, runtimeOptimized := a.runtimeConfigForPerformance(cfg, plan, encoder)
+		runtimeCfg, encoder, runtimeOptimized := a.selectRuntimeEncoding(cfg, plan)
+		normalStreamingPriority := keepNormalStreamingPriority(encoder, runtimeOptimized)
 		a.mu.Lock()
 		currentGeneration := a.desired && a.generation == gen
 		a.mu.Unlock()
@@ -883,7 +884,7 @@ func (a *app) runLoop(gen int64) {
 			a.recordLaunchError(gen, err)
 			return
 		}
-		if !runtimeOptimized {
+		if !normalStreamingPriority {
 			lowerProcessPriority(cmd.Process.Pid)
 		}
 
@@ -918,7 +919,7 @@ func (a *app) runLoop(gen int64) {
 		a.setOverlayStatus(true, "")
 		a.appendLog(fmt.Sprintf("Поток запущен, PID=%d, источник=%s, кодировщик=%s, назначение=%s", cmd.Process.Pid, plan.Description, encoderLabel(encoder), shownDestination))
 
-		capture := newCaptureSupervisor(a, runtimeCfg, plan, runtimeOptimized)
+		capture := newCaptureSupervisor(a, runtimeCfg, plan, normalStreamingPriority)
 		go capture.run(streamCtx)
 		writerDone := make(chan error, 1)
 		go func() { writerDone <- capture.writeFrames(streamCtx, videoIn) }()
@@ -926,7 +927,7 @@ func (a *app) runLoop(gen int64) {
 		var wg sync.WaitGroup
 		wg.Add(2)
 		go func() { defer wg.Done(); a.scanPipe("ffmpeg", stderr) }()
-		go func() { defer wg.Done(); a.scanPipe("ffmpeg", stdout) }()
+		go func() { defer wg.Done(); a.scanPipe("ffmpeg-progress", stdout) }()
 
 		err = cmd.Wait()
 		cancelStream()
@@ -964,6 +965,12 @@ func (a *app) runLoop(gen int64) {
 		reason := a.fatalCaptureReason
 		encoderFailed := a.encoderFailureDetected && isHardwareEncoder(encoder)
 		streamDuration := time.Since(a.startedAt)
+		videoFPS, videoSpeed, videoDup, videoDrop := a.videoFPS, a.videoSpeed, a.videoDup, a.videoDrop
+		if streamDuration >= 30*time.Second {
+			// A connection that stayed healthy for a while starts the transport
+			// retry sequence from the fast first attempt again.
+			transportFailures = 0
+		}
 		if encoderFailed {
 			if a.encoderFailures == nil {
 				a.encoderFailures = make(map[string]encoderFailureState)
@@ -983,8 +990,11 @@ func (a *app) runLoop(gen int64) {
 		} else if isHardwareEncoder(encoder) && streamDuration >= time.Minute {
 			delete(a.encoderFailures, encoder)
 		}
-		if reason == "" && err != nil && stillDesired {
-			reason = "RTSP-соединение было прервано"
+		transportFailure := reason == "" && err != nil && stillDesired
+		if transportFailure {
+			transportFailures++
+			delay = transportReconnectDelay(transportFailures)
+			reason = transportInterruptedReason(runtimeCfg.Protocol)
 		}
 		if reason != "" && stillDesired {
 			now := time.Now()
@@ -996,6 +1006,9 @@ func (a *app) runLoop(gen int64) {
 		a.mu.Unlock()
 		if len(reconnectSnapshot) > 0 {
 			a.saveReconnectHistory(reconnectSnapshot)
+		}
+		if err != nil && stillDesired {
+			a.appendLog(reconnectTelemetryLine(encoder, runtimeCfg.FPS, streamDuration, videoFPS, videoSpeed, videoDup, videoDrop, delay))
 		}
 		a.setOverlayStatus(false, "")
 		if reason != "" {
@@ -1017,7 +1030,7 @@ func (a *app) scanPipe(prefix string, r io.Reader) {
 	s.Buffer(buf, 2*1024*1024)
 	for s.Scan() {
 		line := s.Text()
-		if prefix == "ffmpeg" && a.processFFmpegLine(prefix, line) {
+		if (prefix == "ffmpeg" || prefix == "ffmpeg-progress") && a.processFFmpegLine(prefix, line) {
 			continue
 		}
 		a.appendLog(prefix + ": " + line)
@@ -1363,7 +1376,7 @@ func buildEncoderFFmpegDetailed(cfg Config, plan capturePlan, encoder, systemAud
 		return "", nil, capturePlan{}, err
 	}
 
-	args := []string{"-hide_banner", "-loglevel", "info", "-fflags", "+genpts"}
+	args := []string{"-hide_banner", "-loglevel", "info", "-nostats", "-stats_period", "1", "-progress", "pipe:1", "-fflags", "+genpts"}
 	nextInput := 0
 	systemInput := -1
 	microphoneInput := -1
@@ -1410,7 +1423,7 @@ func buildEncoderFFmpegDetailed(cfg Config, plan capturePlan, encoder, systemAud
 	if isHardwareEncoder(encoder) {
 		encoderPixelFormat = "nv12"
 	}
-	filters := []string{fmt.Sprintf("[%d:v]setpts=N/(%d*TB),scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=bicubic+accurate_rnd+full_chroma_int,format=%s[vout]", videoInput, cfg.FPS, encoderPixelFormat)}
+	filters := []string{fmt.Sprintf("[%d:v]setpts=N/(%d*TB),format=%s[vout]", videoInput, cfg.FPS, encoderPixelFormat)}
 	hasAudio := systemInput >= 0 || microphoneInput >= 0
 	if systemInput >= 0 {
 		systemFilter := "aresample=async=1:first_pts=0,asetpts=N/SR/TB"
@@ -1465,6 +1478,7 @@ func buildEncoderFFmpegDetailed(cfg Config, plan capturePlan, encoder, systemAud
 		}
 		args = append(args,
 			"-c:v", "libx265",
+			"-threads", "0",
 			"-preset", cfg.Preset,
 			"-tune", "zerolatency",
 			"-x265-params", x265Params,
@@ -1476,6 +1490,7 @@ func buildEncoderFFmpegDetailed(cfg Config, plan capturePlan, encoder, systemAud
 		)
 		args = append(args,
 			"-c:v", "libx264",
+			"-threads", "0",
 			"-preset", cfg.Preset,
 			"-tune", "zerolatency",
 			"-x264-params", x264Params,

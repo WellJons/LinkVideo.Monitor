@@ -140,6 +140,27 @@ func (a *app) processFFmpegLine(prefix, line string) bool {
 	if clean == "" {
 		return false
 	}
+	if prefix == "ffmpeg-progress" {
+		key, value, ok := strings.Cut(clean, "=")
+		if !ok {
+			return true
+		}
+		a.mu.Lock()
+		switch key {
+		case "frame":
+			a.encoderStartupConfirmed = true
+		case "fps":
+			a.videoFPS, _ = strconv.ParseFloat(value, 64)
+		case "speed":
+			a.videoSpeed, _ = strconv.ParseFloat(strings.TrimSuffix(value, "x"), 64)
+		case "dup_frames":
+			a.videoDup, _ = strconv.Atoi(value)
+		case "drop_frames":
+			a.videoDrop, _ = strconv.Atoi(value)
+		}
+		a.mu.Unlock()
+		return true
+	}
 	if strings.HasPrefix(clean, "frame=") {
 		fields := progressKVPattern.FindAllStringSubmatch(clean, -1)
 		a.mu.Lock()
