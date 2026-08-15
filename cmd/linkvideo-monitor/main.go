@@ -746,6 +746,7 @@ func (a *app) watchCaptureTarget(_ *exec.Cmd, _ Config, _ capturePlan) {
 
 func (a *app) runLoop(gen int64) {
 	first := true
+	transportFailures := 0
 	for {
 		a.mu.Lock()
 		if !a.desired || a.generation != gen {
@@ -964,6 +965,12 @@ func (a *app) runLoop(gen int64) {
 		reason := a.fatalCaptureReason
 		encoderFailed := a.encoderFailureDetected && isHardwareEncoder(encoder)
 		streamDuration := time.Since(a.startedAt)
+		videoFPS, videoSpeed, videoDup, videoDrop := a.videoFPS, a.videoSpeed, a.videoDup, a.videoDrop
+		if streamDuration >= 30*time.Second {
+			// A connection that stayed healthy for a while starts the transport
+			// retry sequence from the fast first attempt again.
+			transportFailures = 0
+		}
 		if encoderFailed {
 			if a.encoderFailures == nil {
 				a.encoderFailures = make(map[string]encoderFailureState)
@@ -983,8 +990,11 @@ func (a *app) runLoop(gen int64) {
 		} else if isHardwareEncoder(encoder) && streamDuration >= time.Minute {
 			delete(a.encoderFailures, encoder)
 		}
-		if reason == "" && err != nil && stillDesired {
-			reason = "RTSP-соединение было прервано"
+		transportFailure := reason == "" && err != nil && stillDesired
+		if transportFailure {
+			transportFailures++
+			delay = transportReconnectDelay(transportFailures)
+			reason = transportInterruptedReason(runtimeCfg.Protocol)
 		}
 		if reason != "" && stillDesired {
 			now := time.Now()
@@ -996,6 +1006,9 @@ func (a *app) runLoop(gen int64) {
 		a.mu.Unlock()
 		if len(reconnectSnapshot) > 0 {
 			a.saveReconnectHistory(reconnectSnapshot)
+		}
+		if err != nil && stillDesired {
+			a.appendLog(reconnectTelemetryLine(encoder, runtimeCfg.FPS, streamDuration, videoFPS, videoSpeed, videoDup, videoDrop, delay))
 		}
 		a.setOverlayStatus(false, "")
 		if reason != "" {
