@@ -3,33 +3,53 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
+
+type silentUpdateFailureMarker struct {
+	Version  string `json:"version"`
+	Failures int    `json:"failures"`
+	AtUnix   int64  `json:"at_unix"`
+}
 
 func init() {
 	if len(os.Args) < 2 || os.Args[1] != "--silent-update-elevated" {
 		return
 	}
-	defer scheduleSelfDelete()
+	targetVersion := version
+	if len(os.Args) > 2 && strings.TrimSpace(os.Args[2]) != "" {
+		targetVersion = strings.TrimSpace(os.Args[2])
+	}
 	if !isProcessElevated() {
 		appendSilentUpdateLog("silent update rejected: installer is not elevated")
-		os.Exit(21)
+		finishSilentUpdate(21)
 	}
 	time.Sleep(1500 * time.Millisecond)
 	if err := installProductSilentSystem(); err != nil {
 		appendSilentUpdateLog("silent update failed: " + err.Error())
+		recordSilentUpdateFailure(targetVersion)
 		if recoveryErr := recoverCaptureServiceAfterFailedUpdate(); recoveryErr != nil {
 			appendSilentUpdateLog("service recovery after failed update also failed: " + recoveryErr.Error())
 		} else {
 			appendSilentUpdateLog("service recovered after failed update")
 		}
-		os.Exit(22)
+		finishSilentUpdate(22)
 	}
-	appendSilentUpdateLog("silent update completed: " + version)
-	os.Exit(0)
+	clearSilentUpdateFailure()
+	appendSilentUpdateLog("silent update completed: " + targetVersion)
+	finishSilentUpdate(0)
+}
+
+func finishSilentUpdate(code int) {
+	// os.Exit does not run deferred functions, therefore schedule cleanup before
+	// terminating the temporary installer process.
+	scheduleSelfDelete()
+	os.Exit(code)
 }
 
 func installProductSilentSystem() error {
@@ -66,14 +86,14 @@ func installProductSilentSystem() error {
 	hadPrevious := false
 	if _, err := os.Stat(dest); err == nil {
 		hadPrevious = true
-		if err := os.Rename(dest, backup); err != nil {
+		if err := renameDirectoryWithRetry(dest, backup); err != nil {
 			_ = os.RemoveAll(stage)
 			return fmt.Errorf("не удалось подготовить откат предыдущей версии: %w", err)
 		}
 	}
-	if err := os.Rename(stage, dest); err != nil {
+	if err := renameDirectoryWithRetry(stage, dest); err != nil {
 		if hadPrevious {
-			_ = os.Rename(backup, dest)
+			_ = renameDirectoryWithRetry(backup, dest)
 		}
 		return fmt.Errorf("не удалось активировать подготовленное обновление: %w", err)
 	}
@@ -84,9 +104,9 @@ func installProductSilentSystem() error {
 		_ = os.RemoveAll(stage)
 		failedDir := dest + ".update-failed"
 		_ = os.RemoveAll(failedDir)
-		_ = os.Rename(dest, failedDir)
+		_ = renameDirectoryWithRetry(dest, failedDir)
 		if hadPrevious {
-			if err := os.Rename(backup, dest); err != nil {
+			if err := renameDirectoryWithRetry(backup, dest); err != nil {
 				return fmt.Errorf("%v; дополнительно не удалось вернуть предыдущую версию: %w", cause, err)
 			}
 			oldApp := filepath.Join(dest, "LinkVideo.Monitor.exe")
@@ -110,12 +130,67 @@ func installProductSilentSystem() error {
 	return nil
 }
 
+func renameDirectoryWithRetry(from, to string) error {
+	var lastErr error
+	for attempt := 0; attempt < 20; attempt++ {
+		if err := os.Rename(from, to); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return lastErr
+}
+
 func recoverCaptureServiceAfterFailedUpdate() error {
 	appPath := filepath.Join(defaultInstallDir(), "LinkVideo.Monitor.exe")
 	if _, err := os.Stat(appPath); err != nil {
 		return fmt.Errorf("основной EXE недоступен для восстановления службы: %w", err)
 	}
 	return installUACServiceElevated(appPath)
+}
+
+func silentUpdateFailurePath() string {
+	base := strings.TrimSpace(os.Getenv("PROGRAMDATA"))
+	if base == "" {
+		return ""
+	}
+	return filepath.Join(base, "LinkVideo.Monitor", "update-failure.json")
+}
+
+func normalizeSilentUpdateVersion(value string) string {
+	return strings.TrimPrefix(strings.ToLower(strings.TrimSpace(value)), "v")
+}
+
+func recordSilentUpdateFailure(targetVersion string) {
+	path := silentUpdateFailurePath()
+	if path == "" {
+		return
+	}
+	_ = os.MkdirAll(filepath.Dir(path), 0o755)
+	marker := silentUpdateFailureMarker{Version: targetVersion, Failures: 1, AtUnix: time.Now().Unix()}
+	if data, err := os.ReadFile(path); err == nil {
+		var previous silentUpdateFailureMarker
+		if json.Unmarshal(data, &previous) == nil && normalizeSilentUpdateVersion(previous.Version) == normalizeSilentUpdateVersion(targetVersion) && previous.Failures > 0 {
+			marker.Failures = previous.Failures + 1
+		}
+	}
+	data, err := json.Marshal(marker)
+	if err != nil {
+		return
+	}
+	tmp := path + ".tmp"
+	if os.WriteFile(tmp, data, 0o600) == nil {
+		_ = os.Rename(tmp, path)
+	}
+}
+
+func clearSilentUpdateFailure() {
+	if path := silentUpdateFailurePath(); path != "" {
+		_ = os.Remove(path)
+		_ = os.Remove(path + ".tmp")
+	}
 }
 
 func appendSilentUpdateLog(message string) {
