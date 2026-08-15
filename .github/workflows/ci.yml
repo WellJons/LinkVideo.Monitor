@@ -9,6 +9,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          lfs: true
       - uses: actions/setup-go@v5
         with:
           go-version: '1.20.x'
@@ -17,3 +19,6 @@ jobs:
       - name: Build application
         shell: cmd
         run: scripts\windows\build-app.cmd
+      - name: Build installer and uninstaller
+        shell: cmd
+        run: scripts\windows\build-installer.cmd
