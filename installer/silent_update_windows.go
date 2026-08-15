@@ -93,7 +93,9 @@ func installProductSilentSystem() error {
 	}
 	if err := renameDirectoryWithRetry(stage, dest); err != nil {
 		if hadPrevious {
-			_ = renameDirectoryWithRetry(backup, dest)
+			if restoreErr := renameDirectoryWithRetry(backup, dest); restoreErr != nil {
+				return fmt.Errorf("не удалось активировать подготовленное обновление: %v; дополнительно не удалось вернуть предыдущие файлы: %w", err, restoreErr)
+			}
 		}
 		return fmt.Errorf("не удалось активировать подготовленное обновление: %w", err)
 	}
@@ -104,7 +106,9 @@ func installProductSilentSystem() error {
 		_ = os.RemoveAll(stage)
 		failedDir := dest + ".update-failed"
 		_ = os.RemoveAll(failedDir)
-		_ = renameDirectoryWithRetry(dest, failedDir)
+		if err := renameDirectoryWithRetry(dest, failedDir); err != nil {
+			return fmt.Errorf("%v; дополнительно не удалось изолировать неудачную новую версию: %w", cause, err)
+		}
 		if hadPrevious {
 			if err := renameDirectoryWithRetry(backup, dest); err != nil {
 				return fmt.Errorf("%v; дополнительно не удалось вернуть предыдущую версию: %w", cause, err)
