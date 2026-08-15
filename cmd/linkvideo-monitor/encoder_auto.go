@@ -46,6 +46,15 @@ func (a *app) selectVideoEncoder(cfg Config, plan capturePlan) string {
 	}
 	software := softwareEncoderForCodec(cfg.Codec)
 	if requested == software {
+		// Software HEVC is much heavier than H.264. Do not assume that merely
+		// having libx265 means this PC can encode the selected stream in real time.
+		if requested == "libx265" {
+			if err := probeVideoEncoder(cfg, requested, plan); err != nil {
+				a.setVideoEncoder("libx264")
+				a.appendLog("Программный H.265 недоступен для текущих параметров: " + err.Error())
+				return "libx264"
+			}
+		}
 		a.setVideoEncoder(requested)
 		return requested
 	}
@@ -112,12 +121,28 @@ func probeVideoEncoder(cfg Config, encoder string, plan capturePlan) error {
 	if fps < 1 {
 		fps = 15
 	}
+
+	// Hardware encoders and libx264 only need a short functional probe. For
+	// libx265 we need a real-time performance probe as well: on older CPUs x265
+	// may initialise successfully but only produce 5-9 fps for a 15 fps stream.
 	frames := fps / 2
-	if frames < 4 {
+	inputFilter := fmt.Sprintf("color=c=black:s=%dx%d:r=%d", width, height, fps)
+	performanceProbe := encoder == "libx265"
+	if performanceProbe {
+		frames = fps * 2
+		if frames < 30 {
+			frames = 30
+		}
+		inputFilter = fmt.Sprintf("testsrc2=s=%dx%d:r=%d", width, height, fps)
+	} else if frames < 4 {
 		frames = 4
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	timeout := 8 * time.Second
+	if performanceProbe {
+		timeout = 12 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	pixFmt := "nv12"
 	if !isHardwareEncoder(encoder) {
@@ -125,7 +150,7 @@ func probeVideoEncoder(cfg Config, encoder string, plan capturePlan) error {
 	}
 	args := []string{
 		"-hide_banner", "-loglevel", "error",
-		"-f", "lavfi", "-i", fmt.Sprintf("color=c=black:s=%dx%d:r=%d", width, height, fps),
+		"-f", "lavfi", "-i", inputFilter,
 		"-frames:v", fmt.Sprint(frames),
 		"-vf", "format=" + pixFmt,
 		"-c:v", encoder,
@@ -150,9 +175,11 @@ func probeVideoEncoder(cfg Config, encoder string, plan capturePlan) error {
 	args = append(args, "-f", "null", "-")
 	cmd := exec.CommandContext(ctx, resolveExecutable(cfg.FFmpegPath), args...)
 	hideChildWindow(cmd)
+	started := time.Now()
 	out, err := cmd.CombinedOutput()
+	elapsed := time.Since(started)
 	if ctx.Err() != nil {
-		return fmt.Errorf("проверка превысила 8 секунд")
+		return fmt.Errorf("проверка превысила %d секунд", int(timeout/time.Second))
 	}
 	if err != nil {
 		text := strings.TrimSpace(string(out))
@@ -163,6 +190,17 @@ func probeVideoEncoder(cfg Config, encoder string, plan capturePlan) error {
 			text = err.Error()
 		}
 		return fmt.Errorf("%s", text)
+	}
+
+	if performanceProbe {
+		mediaDuration := time.Duration(float64(frames)/float64(fps)*float64(time.Second))
+		// Keep a small safety margin. A probe that is only barely real-time will
+		// usually fall behind once desktop capture, audio and networking are active.
+		maxElapsed := time.Duration(float64(mediaDuration) / 1.05)
+		if elapsed > maxElapsed {
+			actualFPS := float64(frames) / elapsed.Seconds()
+			return fmt.Errorf("недостаточная производительность процессора: %.1f кадр/с при требуемых %d кадр/с", actualFPS, fps)
+		}
 	}
 	return nil
 }
