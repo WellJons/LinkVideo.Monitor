@@ -37,14 +37,14 @@ jobs:
           new = 'go func() { defer wg.Done(); a.scanPipe("ffmpeg-progress", stdout) }()'
           assert old in text, 'stdout scanner block not found'
           text = text.replace(old, new, 1)
-          main.write_text(text, encoding='utf-8')
-
-          logs = Path('cmd/linkvideo-monitor/logs.go')
-          text = logs.read_text(encoding='utf-8')
           old = 'if prefix == "ffmpeg" && a.processFFmpegLine(prefix, line) {'
           new = 'if (prefix == "ffmpeg" || prefix == "ffmpeg-progress") && a.processFFmpegLine(prefix, line) {'
           assert old in text, 'scanPipe progress hook not found'
           text = text.replace(old, new, 1)
+          main.write_text(text, encoding='utf-8')
+
+          logs = Path('cmd/linkvideo-monitor/logs.go')
+          text = logs.read_text(encoding='utf-8')
           marker = '''\tif clean == "" {\n\t\treturn false\n\t}\n'''
           insert = marker + '''\tif prefix == "ffmpeg-progress" {\n\t\tkey, value, ok := strings.Cut(clean, "=")\n\t\tif !ok {\n\t\t\treturn true\n\t\t}\n\t\ta.mu.Lock()\n\t\tswitch key {\n\t\tcase "frame":\n\t\t\ta.encoderStartupConfirmed = true\n\t\tcase "fps":\n\t\t\ta.videoFPS, _ = strconv.ParseFloat(value, 64)\n\t\tcase "speed":\n\t\t\ta.videoSpeed, _ = strconv.ParseFloat(strings.TrimSuffix(value, "x"), 64)\n\t\tcase "dup_frames":\n\t\t\ta.videoDup, _ = strconv.Atoi(value)\n\t\tcase "drop_frames":\n\t\t\ta.videoDrop, _ = strconv.Atoi(value)\n\t\t}\n\t\ta.mu.Unlock()\n\t\treturn true\n\t}\n'''
           assert marker in text, 'processFFmpegLine insertion point not found'
