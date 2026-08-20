@@ -200,7 +200,6 @@ var (
 	procRedrawWindow       = user32DLL.NewProc("RedrawWindow")
 	procGetClientRect      = user32DLL.NewProc("GetClientRect")
 	procGetSystemMetrics   = user32DLL.NewProc("GetSystemMetrics")
-	procSetWindowPos       = user32DLL.NewProc("SetWindowPos")
 	procAdjustWindowRectEx = user32DLL.NewProc("AdjustWindowRectEx")
 	procLoadCursorW        = user32DLL.NewProc("LoadCursorW")
 	procLoadIconW          = user32DLL.NewProc("LoadIconW")

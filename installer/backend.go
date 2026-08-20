@@ -91,7 +91,7 @@ func installProduct(opts installOptions, progress progressFunc) (string, []strin
 	local := os.Getenv("LOCALAPPDATA")
 	roaming := os.Getenv("APPDATA")
 	if local == "" || roaming == "" {
-		return "", nil, errors.New("Windows не вернула пути LOCALAPPDATA и APPDATA")
+		return "", nil, errors.New("пути LOCALAPPDATA и APPDATA не предоставлены Windows")
 	}
 
 	dest := defaultInstallDir()
@@ -365,7 +365,7 @@ func createShortcuts(appPath, dest string, desktop bool) error {
 	roaming := strings.TrimSpace(os.Getenv("APPDATA"))
 	profile := strings.TrimSpace(os.Getenv("USERPROFILE"))
 	if roaming == "" || profile == "" {
-		return errors.New("Windows не вернула путь профиля пользователя")
+		return errors.New("путь профиля пользователя не предоставлен Windows")
 	}
 	startMenuDir := filepath.Join(roaming, `Microsoft\Windows\Start Menu\Programs`)
 	desktopDir := filepath.Join(profile, "Desktop")
@@ -524,7 +524,7 @@ func installUACServiceWorker(appPath string) error {
 	}
 	programData := os.Getenv("PROGRAMDATA")
 	if programData == "" {
-		return errors.New("Windows не вернула путь PROGRAMDATA")
+		return errors.New("путь PROGRAMDATA не предоставлен Windows")
 	}
 	serviceDir := filepath.Join(programData, "LinkVideo.Monitor", "Service")
 	sessionsDir := filepath.Join(programData, "LinkVideo.Monitor", "Sessions")
@@ -690,7 +690,7 @@ func uninstallProduct(removeData bool, progress progressFunc) error {
 	}
 	progress(96, "Завершение удаления…")
 	if len(remaining) > 0 {
-		return fmt.Errorf("Windows не позволила удалить некоторые файлы:\n%s", strings.Join(remaining, "\n"))
+		return fmt.Errorf("некоторые файлы не удалось удалить в Windows:\n%s", strings.Join(remaining, "\n"))
 	}
 	progress(100, "LinkVideo Monitor удалён")
 	return nil
