@@ -295,7 +295,7 @@ func (w *secureMapWriter) SetInactive() {
 
 func (w *secureMapWriter) Write(frame []byte) (int, error) {
 	if len(frame) < w.frameBytes {
-		return 0, ioErrShortBuffer
+		return 0, errSecureFrameShortBuffer
 	}
 	forcedLocked := atomic.LoadUint32((*uint32)(unsafe.Pointer(&w.memory[40]))) != 0
 	active := secureDesktopIsInput()
@@ -355,7 +355,7 @@ func (w *secureMapWriter) Write(frame []byte) (int, error) {
 	return len(frame), nil
 }
 
-var ioErrShortBuffer = errors.New("short secure frame buffer")
+var errSecureFrameShortBuffer = errors.New("short secure frame buffer")
 
 func bindCurrentThreadToWinlogonDesktop() (func(), error) {
 	name, _ := syscall.UTF16PtrFromString("Winlogon")

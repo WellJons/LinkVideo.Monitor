@@ -152,7 +152,3 @@ func normalizePrivacyText(value string) string {
 	}
 	return strings.TrimSpace(b.String())
 }
-
-func containsAnyPrivacy(value string, terms ...string) bool {
-	return privacyIDMatchesAny(normalizePrivacyText(value), terms...)
-}

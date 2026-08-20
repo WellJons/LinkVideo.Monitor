@@ -466,7 +466,7 @@ func buildDXGICaptureArgs(cfg Config, plan capturePlan) ([]string, error) {
 		return nil, fmt.Errorf("не удалось получить список мониторов: %w", err)
 	}
 	if len(monitors) == 0 {
-		return nil, errors.New("Windows не обнаружила подключённые мониторы")
+		return nil, errors.New("подключённые мониторы Windows не обнаружены")
 	}
 
 	source := func(m Monitor, label string) string {

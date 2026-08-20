@@ -146,7 +146,7 @@ func buildSecureDXGICaptureArgs(req secureCaptureRequest) ([]string, error) {
 		})
 	}
 	if len(monitors) == 0 {
-		return nil, errors.New("Winlogon не вернул подключённые DXGI-выходы")
+		return nil, errors.New("подключённые DXGI-выходы Winlogon не обнаружены")
 	}
 
 	source := func(m Monitor, label string) string {

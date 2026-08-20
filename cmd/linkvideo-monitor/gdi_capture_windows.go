@@ -92,10 +92,6 @@ func runGDICapture(out io.Writer, x, y, width, height, outputWidth, outputHeight
 	return runGDICaptureInternal(out, x, y, width, height, outputWidth, outputHeight, fps, drawCursor, false)
 }
 
-func runSecureDesktopGDICapture(out io.Writer, x, y, width, height, outputWidth, outputHeight, fps int, drawCursor bool) error {
-	return runGDICaptureInternal(out, x, y, width, height, outputWidth, outputHeight, fps, drawCursor, true)
-}
-
 func runGDICaptureInternal(out io.Writer, x, y, width, height, outputWidth, outputHeight, fps int, drawCursor, reacquireEveryFrame bool) error {
 	if width < 2 || height < 2 || outputWidth < 2 || outputHeight < 2 {
 		return fmt.Errorf("invalid capture size %dx%d -> %dx%d", width, height, outputWidth, outputHeight)

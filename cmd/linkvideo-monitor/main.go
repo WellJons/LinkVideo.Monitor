@@ -24,7 +24,7 @@ import (
 
 const (
 	appName    = "LinkVideo Monitor"
-	appVersion = "0.8.12-beta"
+	appVersion = "0.8.12"
 	listenAddr = "127.0.0.1:8098"
 )
 
@@ -749,10 +749,6 @@ func (a *app) markFatalCapture(reason string) {
 	a.markPendingRestart(reason, true)
 }
 
-func (a *app) watchCaptureTarget(_ *exec.Cmd, _ Config, _ capturePlan) {
-	// Захват отдельного приложения удалён из пользовательского продукта.
-}
-
 func (a *app) runLoop(gen int64) {
 	first := true
 	transportFailures := 0
@@ -1156,29 +1152,6 @@ func validateCapturePlanDimensions(plan capturePlan) error {
 	return nil
 }
 
-func findWindowForConfig(cfg Config) *WindowInfo {
-	items, err := listWindows()
-	if err != nil {
-		return nil
-	}
-	for i := range items {
-		if cfg.WindowHandle != "" && strings.EqualFold(items[i].Handle, cfg.WindowHandle) {
-			return &items[i]
-		}
-	}
-	for i := range items {
-		if cfg.WindowProcess != "" && strings.EqualFold(items[i].ProcessName, cfg.WindowProcess) {
-			return &items[i]
-		}
-	}
-	for i := range items {
-		if cfg.WindowTitle != "" && items[i].Title == cfg.WindowTitle {
-			return &items[i]
-		}
-	}
-	return nil
-}
-
 func selectedMonitor(cfg Config, monitors []Monitor) (Monitor, bool) {
 	if cfg.MonitorNumber > 0 {
 		for _, m := range monitors {
@@ -1200,7 +1173,7 @@ func resolveCapturePlan(cfg Config) (capturePlan, error) {
 		return plan, fmt.Errorf("не удалось получить список мониторов: %w", err)
 	}
 	if len(monitors) == 0 {
-		return plan, errors.New("Windows не обнаружила подключённые мониторы")
+		return plan, errors.New("подключённые мониторы Windows не обнаружены")
 	}
 	if cfg.CaptureMode == "monitor" {
 		m, ok := selectedMonitor(cfg, monitors)
@@ -1289,7 +1262,7 @@ func buildDesktopCaptureFilter(cfg Config, plan capturePlan) (string, error) {
 		return "", fmt.Errorf("не удалось получить список мониторов: %w", err)
 	}
 	if len(monitors) == 0 {
-		return "", errors.New("Windows не обнаружила подключённые мониторы")
+		return "", errors.New("подключённые мониторы Windows не обнаружены")
 	}
 
 	source := func(outputIndex, offsetX, offsetY, width, height int, label string, applyScale bool) string {
@@ -1704,7 +1677,7 @@ func extractEncodedToken(input string) (string, error) {
 	}
 	token = strings.TrimSpace(strings.Trim(token, "/\\"))
 	if token == "" {
-		return "", errors.New("в ссылке отсутствует Base58-код после linkvideomonitor:")
+		return "", errors.New("в ссылке отсутствует Base58-код после linkvideomonitor")
 	}
 	return token, nil
 }

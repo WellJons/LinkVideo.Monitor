@@ -38,50 +38,6 @@ func encoderLabel(name string) string {
 	return name
 }
 
-func (a *app) selectVideoEncoder(cfg Config, plan capturePlan) string {
-	now := time.Now()
-	requested := cfg.Encoder
-	if requested == "" || requested == "auto" || encoderCodec(requested) != cfg.Codec {
-		requested = softwareEncoderForCodec(cfg.Codec)
-	}
-	software := softwareEncoderForCodec(cfg.Codec)
-	if requested == software {
-		// Software HEVC is much heavier than H.264. Do not assume that merely
-		// having libx265 means this PC can encode the selected stream in real time.
-		if requested == "libx265" {
-			if err := probeVideoEncoder(cfg, requested, plan); err != nil {
-				a.setVideoEncoder("libx264")
-				a.appendLog("Программный H.265 недоступен для текущих параметров: " + err.Error())
-				return "libx264"
-			}
-		}
-		a.setVideoEncoder(requested)
-		return requested
-	}
-
-	a.mu.Lock()
-	state := a.encoderFailures[requested]
-	a.mu.Unlock()
-	if state.DisabledUntil.After(now) {
-		a.setVideoEncoder(software)
-		a.appendLog(fmt.Sprintf("Кодировщик %s временно отключён после ошибки до %s; используется %s", encoderLabel(requested), state.DisabledUntil.Format("15:04"), encoderLabel(software)))
-		return software
-	}
-	if err := probeVideoEncoder(cfg, requested, plan); err == nil {
-		a.setVideoEncoder(requested)
-		a.appendLog("Кодировщик: " + encoderLabel(requested) + " (проверен перед запуском)")
-		return requested
-	} else {
-		a.mu.Lock()
-		a.encoderFailures[requested] = encoderFailureState{Count: 1, LastFailure: now, DisabledUntil: now.Add(30 * time.Minute), Reason: err.Error()}
-		a.mu.Unlock()
-		a.setVideoEncoder(software)
-		a.appendLog("Выбранный кодировщик " + encoderLabel(requested) + " недоступен: " + err.Error())
-		a.appendLog("Для непрерывной работы используется " + encoderLabel(software))
-		return software
-	}
-}
-
 func automaticEncoderCandidates(codec string) []encoderOption {
 	names := strings.ToLower(strings.Join(videoAdapterNames(), "\n"))
 	result := make([]encoderOption, 0, 4)
@@ -203,12 +159,6 @@ func probeVideoEncoder(cfg Config, encoder string, plan capturePlan) error {
 		}
 	}
 	return nil
-}
-
-func (a *app) setVideoEncoder(name string) {
-	a.mu.Lock()
-	a.videoEncoder = name
-	a.mu.Unlock()
 }
 
 func (a *app) setCaptureBackend(name string) {
