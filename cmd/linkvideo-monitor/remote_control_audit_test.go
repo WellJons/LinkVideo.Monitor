@@ -25,10 +25,10 @@ func TestCommandIDStringRejectsCompositeJSON(t *testing.T) {
 func newRemoteAuditApp(t *testing.T) *app {
 	t.Helper()
 	a := &app{
-		cfg: defaultConfig(),
-		cfgPath: filepath.Join(t.TempDir(), "config.json"),
+		cfg:             defaultConfig(),
+		cfgPath:         filepath.Join(t.TempDir(), "config.json"),
 		encoderFailures: make(map[string]encoderFailureState),
-		adminTokens: make(map[string]time.Time),
+		adminTokens:     make(map[string]time.Time),
 	}
 	return a
 }
