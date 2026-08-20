@@ -1,5 +1,7 @@
-LinkVideo Monitor 0.8.11 Beta
+LinkVideo Monitor 0.8.12
 
-Windows amd64, GOAMD64=v1
-Main executable includes capture, Windows service, Winlogon DXGI helper, overlay, WASAPI, DirectShow microphone capture and administrator authorization modes.
-Installer includes FFmpeg and installs LinkVideoMonitorCapture service.
+Target: Windows amd64
+Go: 1.20.x (Windows 7 compatible build)
+
+The application includes screen capture, Windows service support, Winlogon/Secure Desktop capture, overlay, system audio and microphone capture.
+The installer packages FFmpeg and installs the LinkVideoMonitorCapture service.
