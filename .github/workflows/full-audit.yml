@@ -4,10 +4,13 @@ on:
   push:
     branches:
       - audit/full-code-review
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 jobs:
-  audit:
+  windows-build-test:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -17,9 +20,15 @@ jobs:
         with:
           go-version: '1.20.x'
           cache: true
-      - name: Unit tests
-        run: go test ./...
-      - name: Go vet
+      - name: Application unit tests
+        run: go test -count=1 ./cmd/linkvideo-monitor
+      - name: Application vet
+        run: go vet ./cmd/linkvideo-monitor
+      - name: Installer unit tests
+        working-directory: installer
+        run: go test -count=1 ./...
+      - name: Installer vet
+        working-directory: installer
         run: go vet ./...
       - name: Build application
         shell: cmd
@@ -27,3 +36,52 @@ jobs:
       - name: Build installer and uninstaller
         shell: cmd
         run: scripts\windows\build-installer.cmd
+
+  static-analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
+      - name: Check gofmt
+        shell: bash
+        run: |
+          files="$(git ls-files '*.go')"
+          bad="$(gofmt -l $files)"
+          if [ -n "$bad" ]; then
+            echo "Files requiring gofmt:"
+            echo "$bad"
+            exit 1
+          fi
+      - name: Install analyzers
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: Staticcheck application for Windows
+        env:
+          GOOS: windows
+          GOARCH: amd64
+        run: staticcheck ./cmd/linkvideo-monitor
+      - name: Govulncheck application for Windows
+        env:
+          GOOS: windows
+          GOARCH: amd64
+        run: govulncheck ./cmd/linkvideo-monitor
+      - name: Staticcheck installer for Windows
+        working-directory: installer
+        env:
+          GOOS: windows
+          GOARCH: amd64
+        run: staticcheck ./...
+      - name: Govulncheck installer for Windows
+        working-directory: installer
+        env:
+          GOOS: windows
+          GOARCH: amd64
+        run: govulncheck ./...
+      - name: Python syntax check
+        run: python3 -m py_compile tools/*.py
