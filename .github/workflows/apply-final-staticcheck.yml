@@ -1,0 +1,30 @@
+name: Apply Final Staticcheck Fixes
+on:
+  push:
+    branches: [audit/full-code-review]
+permissions:
+  contents: write
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, '[final-staticcheck-applied]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: audit/full-code-review
+          fetch-depth: 0
+      - name: Apply final staticcheck fixes
+        run: python3 tools/apply_final_staticcheck.py
+      - name: Format
+        run: gofmt -w installer/backend.go installer/main.go
+      - name: Remove one-shot machinery
+        run: |
+          rm tools/apply_final_staticcheck.py
+          rm .github/workflows/apply-final-staticcheck.yml
+      - name: Commit
+        run: |
+          git config user.name "LinkVideo Audit Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix final installer static-analysis findings [final-staticcheck-applied]"
+          git push origin HEAD:audit/full-code-review
