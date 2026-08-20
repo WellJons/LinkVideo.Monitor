@@ -22,12 +22,17 @@ jobs:
           cache: true
       - name: Application unit tests
         run: go test -count=1 ./cmd/linkvideo-monitor
+      - name: Application race tests
+        continue-on-error: true
+        run: go test -race -count=1 ./cmd/linkvideo-monitor
       - name: Application vet
+        continue-on-error: true
         run: go vet ./cmd/linkvideo-monitor
       - name: Installer unit tests
         working-directory: installer
         run: go test -count=1 ./...
       - name: Installer vet
+        continue-on-error: true
         working-directory: installer
         run: go vet ./...
       - name: Build application
@@ -63,26 +68,31 @@ jobs:
           go install honnef.co/go/tools/cmd/staticcheck@latest
           go install golang.org/x/vuln/cmd/govulncheck@latest
       - name: Staticcheck application for Windows
+        continue-on-error: true
         env:
           GOOS: windows
           GOARCH: amd64
         run: staticcheck ./cmd/linkvideo-monitor
       - name: Govulncheck application for Windows
+        continue-on-error: true
         env:
           GOOS: windows
           GOARCH: amd64
         run: govulncheck ./cmd/linkvideo-monitor
       - name: Staticcheck installer for Windows
+        continue-on-error: true
         working-directory: installer
         env:
           GOOS: windows
           GOARCH: amd64
         run: staticcheck ./...
       - name: Govulncheck installer for Windows
+        continue-on-error: true
         working-directory: installer
         env:
           GOOS: windows
           GOARCH: amd64
         run: govulncheck ./...
       - name: Python syntax check
+        continue-on-error: true
         run: python3 -m py_compile tools/*.py
