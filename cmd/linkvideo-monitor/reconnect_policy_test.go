@@ -71,3 +71,10 @@ func TestFFmpegTransportFailureReasonClassifiesCommonNetworkErrors(t *testing.T)
 		}
 	}
 }
+
+func TestKnownUnusedScThresholdWarningIsSuppressed(t *testing.T) {
+	line := "[out#0/rtsp] Codec AVOption sc_threshold (Scene change threshold) has not been used for any stream."
+	if !isIgnorableFFmpegDiagnostic(strings.ToLower(line)) {
+		t.Fatalf("expected known harmless FFmpeg warning to be suppressed")
+	}
+}
