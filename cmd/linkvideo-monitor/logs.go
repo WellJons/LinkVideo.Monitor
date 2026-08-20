@@ -184,6 +184,9 @@ func (a *app) processFFmpegLine(prefix, line string) bool {
 		return true
 	}
 	lower := strings.ToLower(clean)
+	if isIgnorableFFmpegDiagnostic(lower) {
+		return true
+	}
 	if strings.HasPrefix(lower, "output #0") || (strings.Contains(lower, "stream #0:0: video: h264") || strings.Contains(lower, "stream #0:0: video: hevc")) {
 		a.mu.Lock()
 		a.encoderStartupConfirmed = true
@@ -240,6 +243,10 @@ func (a *app) processFFmpegLine(prefix, line string) bool {
 		a.markPendingRestart(reason, false)
 	}
 	return false
+}
+
+func isIgnorableFFmpegDiagnostic(lower string) bool {
+	return strings.Contains(lower, "codec avoption sc_threshold") && strings.Contains(lower, "has not been used")
 }
 
 func ffmpegTransportFailureReason(lower string) string {
