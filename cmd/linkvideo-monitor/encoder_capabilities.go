@@ -2,7 +2,6 @@ package main
 
 import (
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -79,8 +78,12 @@ func capabilityProbePlan(cfg Config) capturePlan {
 func (a *app) getEncoderCapabilities(force bool) []EncoderCapability {
 	a.mu.Lock()
 	cfg := a.cfg
+	cached := append([]EncoderCapability(nil), a.encoderCapabilities...)
+	cachedAt := a.encoderCapabilitiesAt
 	a.mu.Unlock()
-	_ = force // benchmark results are cached by the exact runtime parameters instead
+	if !force && len(cached) > 0 && time.Since(cachedAt) < 30*time.Minute {
+		return cached
+	}
 
 	plan := capabilityProbePlan(cfg)
 	if resolvedPlan, err := resolveCapturePlan(cfg); err == nil {
@@ -89,31 +92,29 @@ func (a *app) getEncoderCapabilities(force bool) []EncoderCapability {
 	adapters := strings.Join(videoAdapterNames(), "\n")
 	candidates := append(encoderCandidatesForCodec("h264"), encoderCandidatesForCodec("h265")...)
 	results := make([]EncoderCapability, len(candidates))
-	var wg sync.WaitGroup
+
+	// Run probes in a deterministic order instead of starting every software and
+	// hardware encoder benchmark at the same time. On low-end PCs the previous
+	// fan-out could consume all CPU/GPU resources while the real stream was
+	// starting, making both the probe and the stream look slower than they were.
 	for i, candidate := range candidates {
-		i, candidate := i, candidate
 		results[i] = EncoderCapability{Name: candidate.Name, Label: candidate.Label, Codec: encoderCodec(candidate.Name)}
 		if isHardwareEncoder(candidate.Name) && !adapterMatchesEncoder(adapters, candidate.Name) {
 			results[i].Reason = "Подходящий видеоадаптер не обнаружен"
 			continue
 		}
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			probeCfg := cfg
-			probeCfg.Codec = encoderCodec(candidate.Name)
-			probeCfg.Encoder = candidate.Name
-			if probeCfg.FPS < 1 {
-				probeCfg.FPS = 15
-			}
-			if err := probeEncoderForCapabilities(probeCfg, plan, candidate.Name); err != nil {
-				results[i].Reason = err.Error()
-				return
-			}
-			results[i].Available = true
-		}()
+		probeCfg := cfg
+		probeCfg.Codec = encoderCodec(candidate.Name)
+		probeCfg.Encoder = candidate.Name
+		if probeCfg.FPS < 1 {
+			probeCfg.FPS = 15
+		}
+		if err := probeEncoderForCapabilities(probeCfg, plan, candidate.Name); err != nil {
+			results[i].Reason = err.Error()
+			continue
+		}
+		results[i].Available = true
 	}
-	wg.Wait()
 
 	a.mu.Lock()
 	a.encoderCapabilities = append([]EncoderCapability(nil), results...)
