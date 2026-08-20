@@ -245,7 +245,11 @@ func downloadMediaMTX(dest string, release mediaMTXRelease) error {
 	return nil
 }
 
-func mediaMTXConfig(cfg Config, release mediaMTXRelease) []byte {
+func mediaMTXConfig(cfg Config) []byte {
+	return mediaMTXConfigForRelease(cfg, selectedMediaMTXRelease())
+}
+
+func mediaMTXConfigForRelease(cfg Config, release mediaMTXRelease) []byte {
 	path := sanitizeStreamPath(cfg.LocalRTSPPath)
 	if release.LegacyConfig {
 		return []byte(fmt.Sprintf(`logLevel: info
@@ -383,7 +387,7 @@ func (a *app) ensureMediaMTX(cfg Config) error {
 	}
 
 	cfgFile := filepath.Join(filepath.Dir(a.cfgPath), "mediamtx.yml")
-	content := mediaMTXConfig(cfg, release)
+	content := mediaMTXConfigForRelease(cfg, release)
 	if err := os.MkdirAll(filepath.Dir(cfgFile), 0o755); err != nil {
 		return err
 	}
