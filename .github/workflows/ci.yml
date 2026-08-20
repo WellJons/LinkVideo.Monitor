@@ -5,35 +5,9 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply-reviewed-fixes:
-    if: ${{ github.event_name == 'pull_request' && github.head_ref == 'audit/full-code-review' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: audit/full-code-review
-          fetch-depth: 0
-      - name: Apply reviewed fixes
-        run: python3 tools/apply_audit_round3.py
-      - name: Format Go sources
-        run: gofmt -w $(git ls-files '*.go')
-      - name: Remove temporary audit machinery
-        run: |
-          rm -f tools/apply_audit_round3.py
-          rm -f .github/workflows/apply-audit-round3.yml
-          rm -f .audit-round3-trigger
-      - name: Commit reviewed fixes
-        run: |
-          git config user.name "WellJons"
-          git config user.email "actions@users.noreply.github.com"
-          git add -A
-          git diff --cached --quiet && exit 0
-          git commit -m "Fix installer rollback and Windows service startup"
-          git push origin HEAD:audit/full-code-review
-
   windows-build:
     runs-on: windows-latest
     steps:
@@ -51,3 +25,29 @@ jobs:
       - name: Build installer and uninstaller
         shell: cmd
         run: scripts\windows\build-installer.cmd
+      - name: Upload test binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: LinkVideo-Monitor-0.8.12-current
+          if-no-files-found: error
+          path: |
+            build/LinkVideo.Monitor.exe
+            build/LinkVideo.Monitor_0.8.12_Setup.exe
+            build/Uninstall.exe
+
+  source-snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: LinkVideo-Monitor-source-snapshot
+          if-no-files-found: error
+          path: |
+            cmd
+            installer
+            scripts
+            tools
+            go.mod
+            go.work
