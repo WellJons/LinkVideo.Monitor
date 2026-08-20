@@ -1,25 +1,49 @@
 # LinkVideo Monitor 0.8.12 — developer handoff
 
-This document accompanies the final 0.8.12 audit branch.
+Документ сопровождает финальную ветку аудита LinkVideo Monitor 0.8.12.
 
-## Release target
+## Целевая версия
 
 - Product version: `0.8.12`
-- Windows compatibility target: Windows 7 through current Windows releases
-- Shipping Go compatibility toolchain: Go 1.20.x
-- Local RTSP server: MediaMTX 1.0.3 on Windows 7; MediaMTX 1.19.3 on Windows 8+ with SHA-256 verification
+- Windows: Windows 7 и более новые версии
+- Shipping Go toolchain: Go 1.20.x для сохранения совместимости с Windows 7
+- MediaMTX на Windows 7: `1.0.3`, SHA-256 `f3cffd7ec6113895e8742346644cd5856bd007e6535797ef41e4303cf4bc0d6c`
+- MediaMTX на Windows 8+: `1.19.3`, SHA-256 `5d82148d1032a6a190d9909a2997d9989457aaadf49af87dd02cd4512d31bebe`
 
-## Final hardening included
+## Что исправлено и усилено
 
-- Transactional installer staging and rollback for normal/manual installation.
-- ZIP payload path traversal/rooted-path rejection.
-- Protected-desktop SYSTEM service no longer bypasses the user's `LaunchWithWindows` choice.
-- Local HTTP control surface remains loopback-only and protected against cross-origin state-changing requests.
-- Remote endpoint validation and secure capture request validation retained.
-- Obsolete window-capture and superseded encoder-selection code removed.
-- Application version marker finalized from `0.8.12-beta` to `0.8.12`.
-- Final installer static-analysis findings have been resolved; this commit triggers the release-gate validation on the cleaned tree.
+- Транзакционная установка: новая версия сначала полностью подготавливается, затем активируется; при критической ошибке выполняется откат файлов и службы.
+- Защита распаковки payload от path traversal и абсолютных/rooted путей.
+- SYSTEM-служба больше не обходит пользовательский параметр `LaunchWithWindows`; её задача — Secure Desktop/UAC/Winlogon capture.
+- Локальный HTTP control surface остаётся только на loopback и защищён от сторонних cross-origin запросов, изменяющих состояние.
+- Усилена проверка удалённых endpoint-ов и запросов Secure Desktop capture.
+- Удалён устаревший код старого window capture и заменённого выбора кодировщика.
+- Версия приложения зафиксирована как `0.8.12`, без `-beta`.
+- MediaMTX выбирается по версии Windows и проверяется по SHA-256 перед использованием.
+- Неиспользуемые сетевые сервисы локального MediaMTX отключены; для локального сценария оставлен необходимый RTSP.
 
-## Validation gates
+## Автоматические release gates
 
-The `CI` and `Full Audit` GitHub Actions workflows are the release gates. Final results and artifact digests will be added here after the green run.
+Для текущего release-кандидата обязательны оба зелёных workflow:
+
+1. `CI`: unit tests + Windows build приложения, installer и uninstaller.
+2. `Full Audit`: unit tests, race tests, `go vet`, `gofmt`, `staticcheck`, `govulncheck`, installer tests/vet, затем полный Windows build.
+
+Точные run ID, commit SHA и SHA-256 собранных EXE передаются вместе с финальным developer package и фиксируются в описании PR #6.
+
+## Что проверить вручную перед публичным выпуском
+
+- чистая установка на Windows 7 и Windows 10/11;
+- обновление поверх предыдущей версии с сохранением настроек;
+- искусственно прерванная/неудачная установка и корректный rollback;
+- локальный RTSP и просмотр потока;
+- Secure Desktop/UAC, Win+L и поведение при выключении физического дисплея;
+- выключенный `LaunchWithWindows` не должен самопроизвольно включать фоновый запуск;
+- RTSP/RTMP отправка в LinkVideo и автоматическое переподключение;
+- H.264/H.265 и fallback аппаратного кодировщика;
+- системный звук и микрофон;
+- production-подпись EXE сертификатом компании и проверка подписи после подписания.
+
+## Подпись
+
+GitHub Actions test artifacts специально рассматриваются как тестовые и могут быть без Authenticode-подписи. Публичный production build должен быть подписан штатным сертификатом LinkVideo/компании после сборки и до публикации обновления.
