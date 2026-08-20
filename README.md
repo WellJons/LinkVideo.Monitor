@@ -1,4 +1,4 @@
-# LinkVideo Monitor 0.8.11 Beta
+# LinkVideo Monitor 0.8.12 Beta
 
 Windows-приложение для фоновой трансляции экранов, системного звука и микрофона в LinkVideo по RTSP/RTMP.
 
