@@ -21,12 +21,12 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 	// Decode all non-numeric fields through the standard decoder first.
 	cleaned := make(map[string]json.RawMessage, len(raw))
 	numeric := map[string]bool{
-		"local_rtsp_port": true, "monitor_index": true, "offset_x": true,
-		"offset_y": true, "width": true, "height": true, "fps": true,
+		"local_rtsp_port": true, "monitor_index": true, "monitor_number": true,
+		"offset_x": true, "offset_y": true, "width": true, "height": true, "fps": true,
 		"bitrate_kbps": true, "maxrate_kbps": true, "bufsize_kbps": true,
 		"audio_bitrate_kbps": true, "audio_sample_rate": true,
 		"audio_channels": true, "audio_advance_ms": true, "restart_delay_s": true,
-		"overlay_x": true, "overlay_y": true,
+		"overlay_x": true, "overlay_y": true, "microphone_voice_db": true,
 		"remote_sync_interval_min": true,
 	}
 	for k, v := range raw {
@@ -58,7 +58,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		dst *int
 	}{
 		{"local_rtsp_port", &base.LocalRTSPPort},
-		{"monitor_index", &base.MonitorIndex},
+		{"monitor_index", &base.MonitorIndex}, {"monitor_number", &base.MonitorNumber},
 		{"offset_x", &base.OffsetX}, {"offset_y", &base.OffsetY},
 		{"width", &base.Width}, {"height", &base.Height},
 		{"fps", &base.FPS}, {"bitrate_kbps", &base.BitrateKbps},
@@ -69,6 +69,7 @@ func (c *Config) UnmarshalJSON(data []byte) error {
 		{"audio_advance_ms", &base.AudioAdvanceMs},
 		{"restart_delay_s", &base.RestartDelayS},
 		{"overlay_x", &base.OverlayX}, {"overlay_y", &base.OverlayY},
+		{"microphone_voice_db", &base.MicrophoneVoiceDB},
 		{"remote_sync_interval_min", &base.RemoteSyncIntervalMin},
 	}
 	for _, f := range fields {
