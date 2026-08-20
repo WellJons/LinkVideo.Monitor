@@ -714,8 +714,23 @@ func (a *app) stop() {
 }
 
 func (a *app) restart() error {
+	a.mu.Lock()
+	wasDesired := a.desired
+	a.mu.Unlock()
+	if !wasDesired {
+		return nil
+	}
 	a.stop()
+	a.mu.Lock()
+	restartGeneration := a.generation
+	a.mu.Unlock()
 	time.Sleep(350 * time.Millisecond)
+	a.mu.Lock()
+	interrupted := a.generation != restartGeneration || a.desired
+	a.mu.Unlock()
+	if interrupted {
+		return nil
+	}
 	return a.start()
 }
 
@@ -1746,6 +1761,8 @@ func redactURL(raw string) string {
 	}
 	u.Path = "/" + strings.Join(parts, "/")
 	u.RawQuery = ""
+	u.Fragment = ""
+	u.User = nil
 	return u.String()
 }
 func redactArgs(args []string) []string {
@@ -2009,7 +2026,10 @@ func (a *app) routes() http.Handler {
 			writeJSON(w, 400, map[string]string{"error": "не удалось прочитать ссылку"})
 			return
 		}
-		if _, err := extractEncodedToken(body.Link); err != nil {
+		a.mu.Lock()
+		protocol := a.cfg.Protocol
+		a.mu.Unlock()
+		if _, _, err := resolvePublishURL(body.Link, protocol); err != nil {
 			writeJSON(w, 400, map[string]string{"error": err.Error()})
 			return
 		}
@@ -2170,7 +2190,12 @@ func (a *app) routes() http.Handler {
 		writeJSON(w, 200, devices)
 	})
 	mux.HandleFunc("/api/encoder-capabilities", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, 200, a.getEncoderCapabilities(r.URL.Query().Get("refresh") == "1"))
+		force := r.URL.Query().Get("refresh") == "1"
+		if force && r.Method != http.MethodPost {
+			writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"error": "forced refresh requires POST"})
+			return
+		}
+		writeJSON(w, 200, a.getEncoderCapabilities(force))
 	})
 	mux.HandleFunc("/api/check-port", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -2357,11 +2382,13 @@ func localOnly(next http.Handler) http.Handler {
 		// Browsers cannot attach this non-simple header from another origin without
 		// a successful CORS preflight. We never enable CORS, so a random website
 		// cannot stop, restart or reconfigure the local Monitor process.
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			if r.Header.Get("X-LinkVideo-Request") != "1" {
-				writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden local request"})
-				return
-			}
+		requireLocalHeader := r.Method != http.MethodGet && r.Method != http.MethodHead
+		if r.URL.Path == "/api/encoder-capabilities" {
+			requireLocalHeader = true
+		}
+		if requireLocalHeader && r.Header.Get("X-LinkVideo-Request") != "1" {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden local request"})
+			return
 		}
 		w.Header().Set("X-LinkVideo-Monitor", appVersion)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -2573,7 +2600,7 @@ func main() {
 
 	a := newApp()
 	if uriLink != "" {
-		if _, err := extractEncodedToken(uriLink); err == nil {
+		if _, _, err := resolvePublishURL(uriLink, a.cfg.Protocol); err == nil {
 			a.mu.Lock()
 			previousConfig := a.cfg
 			a.cfg.Link = uriLink
@@ -2607,7 +2634,6 @@ func main() {
 	if a.cfg.AutoStart && !a.configLoadError {
 		_ = a.start()
 	}
-	go a.getEncoderCapabilities(false)
 	startRemoteControl(a)
 
 	srv := &http.Server{Handler: a.routes(), ReadHeaderTimeout: 5 * time.Second}

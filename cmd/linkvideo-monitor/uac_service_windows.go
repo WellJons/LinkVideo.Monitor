@@ -334,13 +334,7 @@ func validSecureCaptureRequest(req secureCaptureRequest) bool {
 	if req.SessionID == 0xffffffff || req.ClientPID == 0 || !strings.EqualFold(req.MappingName, expectedMapping) {
 		return false
 	}
-	if req.Width < 2 || req.Height < 2 || req.OutputWidth < 2 || req.OutputHeight < 2 {
-		return false
-	}
-	if req.Width > 32768 || req.Height > 32768 || req.OutputWidth > 8192 || req.OutputHeight > 8192 {
-		return false
-	}
-	return req.FPS >= 1 && req.FPS <= 30
+	return validSecureCaptureDimensions(req.Width, req.Height, req.OutputWidth, req.OutputHeight, req.FPS)
 }
 
 func requestKey(req secureCaptureRequest) string {
@@ -351,32 +345,21 @@ func requestKey(req secureCaptureRequest) string {
 	}, "|")
 }
 
-func isLinkVideoMonitorProcessName(name string) bool {
-	name = strings.ToLower(strings.TrimSpace(name))
-	if name == "linkvideo.monitor.exe" {
-		return true
-	}
-	return strings.HasPrefix(name, "linkvideo.monitor_") && strings.HasSuffix(name, ".exe")
-}
-
 func launchSecureAgent(req secureCaptureRequest) (*secureAgentProcess, error) {
 	var clientSession uint32
 	ok, _, callErr := procProcessIdToSessionIdSecure.Call(uintptr(req.ClientPID), uintptr(unsafe.Pointer(&clientSession)))
 	if ok == 0 || clientSession != req.SessionID {
 		return nil, fmt.Errorf("requesting process is not in session %d", req.SessionID)
 	}
-	if !isLinkVideoMonitorProcessName(processImageName(req.ClientPID)) {
-		return nil, errors.New("secure capture request was not created by LinkVideo Monitor")
-	}
-
 	// Launch the installed application rather than the service copy. FFmpeg is
 	// installed next to this executable and is used by the DXGI secure helper.
 	exe, err := loadInstalledAppPath()
 	if err != nil {
-		exe, err = os.Executable()
-		if err != nil {
-			return nil, err
-		}
+		return nil, fmt.Errorf("installed LinkVideo Monitor path is unavailable: %w", err)
+	}
+	requesterPath := processExecutablePath(req.ClientPID)
+	if !sameWindowsExecutablePath(requesterPath, exe) {
+		return nil, errors.New("secure capture request was not created by the installed LinkVideo Monitor")
 	}
 
 	primaryToken, err := duplicateWinlogonPrimaryToken(req.SessionID)

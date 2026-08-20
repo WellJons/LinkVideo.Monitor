@@ -84,10 +84,10 @@ func newSecureDesktopBridge(plan capturePlan, cfg Config) (secureDesktopBridge, 
 	if err != nil {
 		return nil, err
 	}
-	frameBytes := plan.OutputWidth * plan.OutputHeight * 4
-	if frameBytes <= 0 {
-		return nil, errors.New("invalid secure frame size")
+	if !validSecureCaptureDimensions(plan.Width, plan.Height, plan.OutputWidth, plan.OutputHeight, cfg.FPS) {
+		return nil, errors.New("invalid secure capture dimensions")
 	}
+	frameBytes := plan.OutputWidth * plan.OutputHeight * 4
 	mappingName := fmt.Sprintf(`Local\LinkVideoMonitorSecure_%d`, sessionID)
 	namePtr, _ := syscall.UTF16PtrFromString(mappingName)
 	total := secureMapHeaderSize + frameBytes

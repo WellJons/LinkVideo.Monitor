@@ -193,7 +193,7 @@ func probeVideoEncoder(cfg Config, encoder string, plan capturePlan) error {
 	}
 
 	if performanceProbe {
-		mediaDuration := time.Duration(float64(frames)/float64(fps)*float64(time.Second))
+		mediaDuration := time.Duration(float64(frames) / float64(fps) * float64(time.Second))
 		// Keep a small safety margin. A probe that is only barely real-time will
 		// usually fall behind once desktop capture, audio and networking are active.
 		maxElapsed := time.Duration(float64(mediaDuration) / 1.05)

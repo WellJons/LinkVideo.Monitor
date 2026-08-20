@@ -175,7 +175,26 @@ func downloadMediaMTX(dest string) error {
 
 func mediaMTXConfig(cfg Config) []byte {
 	path := sanitizeStreamPath(cfg.LocalRTSPPath)
-	return []byte(fmt.Sprintf("logLevel: info\nrtspAddress: :%d\npaths:\n  \"%s\":\n    source: publisher\n", cfg.LocalRTSPPort, path))
+	return []byte(fmt.Sprintf(`authMethod: internal
+authInternalUsers:
+  - user: any
+    ips: ["127.0.0.1", "::1"]
+    permissions:
+      - action: publish
+        path: "%s"
+      - action: read
+        path: "%s"
+  - user: any
+    ips: []
+    permissions:
+      - action: read
+        path: "%s"
+logLevel: info
+rtspAddress: :%d
+paths:
+  "%s":
+    source: publisher
+`, path, path, path, cfg.LocalRTSPPort, path))
 }
 
 func probeRTSP(address, streamURL string, timeout time.Duration) error {

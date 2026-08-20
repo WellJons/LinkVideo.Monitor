@@ -416,7 +416,10 @@ func installUACServiceWorker(appPath string) error {
 	if err := os.WriteFile(filepath.Join(serviceDir, "app-path.txt"), []byte(filepath.Clean(appPath)+"\r\n"), 0o644); err != nil {
 		return fmt.Errorf("не удалось сохранить путь фонового агента: %w", err)
 	}
-	if err := os.MkdirAll(sessionsDir, 0o777); err != nil {
+	// Service installation happens with the Monitor stopped, so stale request
+	// files can be discarded and the directory ACL rebuilt from a known state.
+	_ = os.RemoveAll(sessionsDir)
+	if err := os.MkdirAll(sessionsDir, 0o700); err != nil {
 		return err
 	}
 	servicePath := filepath.Join(serviceDir, "LinkVideo.Monitor.Service.exe")
@@ -426,7 +429,8 @@ func installUACServiceWorker(appPath string) error {
 	if err := copyFile(appPath, servicePath); err != nil {
 		return fmt.Errorf("не удалось обновить файл службы: %w", err)
 	}
-	_ = runHidden("icacls.exe", sessionsDir, "/grant", "*S-1-5-32-545:(OI)(CI)M", "/T", "/C")
+	_ = runHidden("icacls.exe", sessionsDir, "/inheritance:r")
+	_ = runHidden("icacls.exe", sessionsDir, "/grant:r", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F", "*S-1-3-0:(OI)(CI)(IO)F", "*S-1-5-32-545:(RX,WD,AD)")
 	_ = runHidden("sc.exe", "delete", "LinkVideoMonitorCapture")
 	time.Sleep(400 * time.Millisecond)
 	binPath := `"` + servicePath + `" --uac-service`

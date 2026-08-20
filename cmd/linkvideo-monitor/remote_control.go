@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -203,11 +202,7 @@ func (a *app) syncRemoteOnce() error {
 		a.mu.Unlock()
 	}()
 
-	u, err := url.Parse(endpoint)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		if err == nil {
-			err = errors.New("адрес должен начинаться с http:// или https://")
-		}
+	if err := validateRemoteAPIEndpoint(endpoint); err != nil {
 		a.setRemoteError(err)
 		return err
 	}

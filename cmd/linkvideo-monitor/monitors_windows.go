@@ -86,18 +86,9 @@ func listMonitors() ([]Monitor, error) {
 			}
 		}
 	}
-	for i := range result {
-		if result[i].AdapterIndex < 0 {
-			result[i].AdapterIndex = 0
-		}
-		if result[i].OutputIndex < 0 {
-			if result[i].DisplayNumber > 0 {
-				result[i].OutputIndex = result[i].DisplayNumber - 1
-			} else {
-				result[i].OutputIndex = result[i].Index
-			}
-		}
-	}
+	// Leave AdapterIndex/OutputIndex at -1 when DXGI could not prove the
+	// mapping. Guessing from DISPLAYn is unsafe on multi-GPU systems because
+	// Windows display numbers are not DXGI output indexes.
 	return result, nil
 }
 

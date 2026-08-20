@@ -93,10 +93,10 @@ func (s *captureSupervisor) planSupportsDXGI() bool {
 	}
 	if s.plan.Mode == "monitor" {
 		m, ok := selectedMonitor(s.cfg, monitors)
-		return ok && m.AdapterIndex == 0
+		return ok && m.AdapterIndex == 0 && m.OutputIndex >= 0
 	}
 	for _, m := range monitors {
-		if m.AdapterIndex != 0 {
+		if m.AdapterIndex != 0 || m.OutputIndex < 0 {
 			return false
 		}
 	}
