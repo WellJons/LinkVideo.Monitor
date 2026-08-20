@@ -3,7 +3,6 @@
 package main
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -41,12 +40,4 @@ func sameWindowsExecutablePath(a, b string) bool {
 	}
 	left, right := clean(a), clean(b)
 	return left != "" && right != "" && strings.EqualFold(left, right)
-}
-
-func currentExecutablePath() string {
-	path, err := os.Executable()
-	if err != nil {
-		return ""
-	}
-	return path
 }
