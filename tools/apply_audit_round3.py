@@ -260,24 +260,135 @@ value = value[:start] + value[end:]
 write(service_path, value)
 
 
-# 4. Make the audit fail on real regressions. Intentional low-level Win32
-# uintptr conversions are reviewed separately, so vet's unsafeptr heuristic is
-# disabled while all other vet analyzers remain enabled.
-workflow = ".github/workflows/full-audit.yml"
-value = text(workflow)
-value = value.replace("      - name: Application race tests\n        continue-on-error: true\n        run: go test -race -count=1 ./cmd/linkvideo-monitor\n", "      - name: Application race tests\n        run: go test -race -count=1 ./cmd/linkvideo-monitor\n")
-value = value.replace("      - name: Application vet\n        continue-on-error: true\n        run: go vet ./cmd/linkvideo-monitor\n", "      - name: Application vet\n        run: go vet -unsafeptr=false ./cmd/linkvideo-monitor\n")
-value = value.replace("      - name: Installer vet\n        continue-on-error: true\n        working-directory: installer\n        run: go vet ./...\n", "      - name: Installer vet\n        working-directory: installer\n        run: go vet -unsafeptr=false ./...\n")
-value = value.replace("      - name: Check gofmt\n        continue-on-error: true\n", "      - name: Check gofmt\n")
-value = value.replace("      - name: Staticcheck application for Windows\n        continue-on-error: true\n", "      - name: Staticcheck application for Windows\n")
-value = value.replace("      - name: Govulncheck application for Windows\n        continue-on-error: true\n", "      - name: Govulncheck application for Windows\n")
-value = value.replace("      - name: Staticcheck installer for Windows\n        continue-on-error: true\n", "      - name: Staticcheck installer for Windows\n")
-value = value.replace("      - name: Govulncheck installer for Windows\n        continue-on-error: true\n", "      - name: Govulncheck installer for Windows\n")
-value = value.replace("      - name: Python syntax check\n        continue-on-error: true\n", "      - name: Python syntax check\n")
-# Keep the test build downloadable without publishing a release.
-needle = "      - name: Build installer and uninstaller\n        shell: cmd\n        run: scripts\\windows\\build-installer.cmd\n"
-addition = needle + "      - name: Upload test binaries\n        uses: actions/upload-artifact@v4\n        with:\n          name: LinkVideo-Monitor-0.8.12-test\n          if-no-files-found: error\n          path: |\n            build/LinkVideo.Monitor.exe\n            build/LinkVideo.Monitor_0.8.12_Setup.exe\n            build/Uninstall.exe\n"
-if needle not in value:
-    raise SystemExit("full audit: build marker not found")
-value = value.replace(needle, addition, 1)
-write(workflow, value)
+# 4. Remove obsolete product paths and static-analysis noise that were left
+# behind after window capture and the old encoder selector were retired.
+replace_once(
+    "cmd/linkvideo-monitor/main.go",
+    'appVersion = "0.8.12-beta"',
+    'appVersion = "0.8.12"',
+)
+
+for path in ["cmd/linkvideo-monitor/main.go", "cmd/linkvideo-monitor/capture_pipeline.go"]:
+    value = text(path).replace(
+        'errors.New("Windows не обнаружила подключённые мониторы")',
+        'errors.New("подключённые мониторы Windows не обнаружены")',
+    )
+    write(path, value)
+replace_once(
+    "cmd/linkvideo-monitor/main.go",
+    'errors.New("в ссылке отсутствует Base58-код после linkvideomonitor:")',
+    'errors.New("в ссылке отсутствует Base58-код после linkvideomonitor")',
+)
+replace_once(
+    "cmd/linkvideo-monitor/secure_dxgi_windows.go",
+    'errors.New("Winlogon не вернул подключённые DXGI-выходы")',
+    'errors.New("подключённые DXGI-выходы Winlogon не обнаружены")',
+)
+
+replace_between(
+    "cmd/linkvideo-monitor/encoder_auto.go",
+    "func (a *app) selectVideoEncoder",
+    "func automaticEncoderCandidates",
+    "",
+)
+replace_between(
+    "cmd/linkvideo-monitor/encoder_auto.go",
+    "func (a *app) setVideoEncoder",
+    "func (a *app) setCaptureBackend",
+    "",
+)
+replace_between(
+    "cmd/linkvideo-monitor/gdi_capture_windows.go",
+    "func runSecureDesktopGDICapture",
+    "func runGDICaptureInternal",
+    "",
+)
+replace_between(
+    "cmd/linkvideo-monitor/main.go",
+    "func (a *app) watchCaptureTarget",
+    "func (a *app) runLoop",
+    "",
+)
+replace_between(
+    "cmd/linkvideo-monitor/main.go",
+    "func findWindowForConfig",
+    "func selectedMonitor",
+    "",
+)
+
+platform_path = "cmd/linkvideo-monitor/platform_windows.go"
+value = text(platform_path)
+value = value.replace('\n\t"sort"', '')
+value = value.replace(
+    '\n\tgwOwner           = 4\n\tappWsExToolWindow = 0x00000080\n\twsExAppWindow     = 0x00040000\n\tdwmwaCloaked      = 14',
+    '',
+)
+for line in [
+    '\n\tprocEnumWindows              = user32.NewProc("EnumWindows")',
+    '\n\tprocIsWindowVisible          = user32.NewProc("IsWindowVisible")',
+    '\n\tprocGetWindowLongPtrW        = user32.NewProc("GetWindowLongPtrW")',
+    '\n\tprocGetWindow                = user32.NewProc("GetWindow")',
+    '\n\tprocGetClassNameW            = user32.NewProc("GetClassNameW")',
+    '\n\tdwmapi                    = syscall.NewLazyDLL("dwmapi.dll")',
+    '\n\tprocDwmGetWindowAttribute = dwmapi.NewProc("DwmGetWindowAttribute")',
+]:
+    value = value.replace(line, '')
+write(platform_path, value)
+replace_between(platform_path, "func windowClass", "func processImageName", "")
+replace_between(platform_path, "func isCloakedWindow", "func runUninstaller", "")
+
+privacy_path = "cmd/linkvideo-monitor/privacy_rules.go"
+value = text(privacy_path)
+block = """func containsAnyPrivacy(value string, terms ...string) bool {
+\treturn privacyIDMatchesAny(normalizePrivacyText(value), terms...)
+}
+"""
+if block not in value:
+    raise SystemExit("privacy_rules.go: containsAnyPrivacy block not found")
+write(privacy_path, value.replace(block, "", 1))
+
+secure_capture_path = "cmd/linkvideo-monitor/secure_capture_windows.go"
+value = text(secure_capture_path).replace("ioErrShortBuffer", "errSecureFrameShortBuffer")
+write(secure_capture_path, value)
+
+replace_once(
+    "cmd/linkvideo-monitor/product_features_test.go",
+    """\ta.mu.Lock()
+\titems := a.appendReconnectEventLocked("сервер закрыл RTSP-соединение", 32, time.Date(2026, 7, 28, 12, 0, 0, 0, time.Local))
+\titems = a.appendReconnectEventLocked("сеть временно недоступна", 1, time.Date(2026, 7, 28, 12, 5, 0, 0, time.Local))
+""",
+    """\ta.mu.Lock()
+\t_ = a.appendReconnectEventLocked("сервер закрыл RTSP-соединение", 32, time.Date(2026, 7, 28, 12, 0, 0, 0, time.Local))
+\titems := a.appendReconnectEventLocked("сеть временно недоступна", 1, time.Date(2026, 7, 28, 12, 5, 0, 0, time.Local))
+""",
+)
+
+service_path = "cmd/linkvideo-monitor/uac_service_windows.go"
+value = text(service_path)
+value = value.replace('\n\twtsapi32Service                         = syscall.NewLazyDLL("wtsapi32.dll")', '')
+value = value.replace(
+    'ok, _, callErr := procProcessIdToSessionIdSecure.Call(uintptr(req.ClientPID), uintptr(unsafe.Pointer(&clientSession)))',
+    'ok, _, _ := procProcessIdToSessionIdSecure.Call(uintptr(req.ClientPID), uintptr(unsafe.Pointer(&clientSession)))',
+)
+value = value.replace(
+    'ok, _, callErr = procCreateProcessAsUserWService.Call(',
+    'ok, _, callErr := procCreateProcessAsUserWService.Call(',
+    1,
+)
+service_marker = """func isWindowsService() bool {
+\treturn len(os.Args) > 1 && os.Args[1] == "--uac-service"
+}
+
+"""
+if service_marker not in value:
+    raise SystemExit("uac_service_windows.go: isWindowsService block not found")
+value = value.replace(service_marker, "", 1)
+write(service_path, value)
+
+ui_path = "cmd/linkvideo-monitor/windows_ui_windows.go"
+value = text(ui_path)
+value = value.replace('\n\thtTransparent = -1\n', '\n')
+value = value.replace('\n\tprocSetTimer                   = user32.NewProc("SetTimer")', '')
+value = value.replace('\n\tprocKillTimer                  = user32.NewProc("KillTimer")', '')
+value = value.replace('\n\tprocEllipse            = gdi32.NewProc("Ellipse")', '')
+write(ui_path, value)
