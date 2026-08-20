@@ -25,7 +25,7 @@ func TestMediaMTXLegacyConfigIsRTSPOnlyAndLoopbackPublish(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.LocalRTSPPath = "screen"
 	cfg.LocalRTSPPort = 8554
-	text := string(mediaMTXConfig(cfg, mediaMTXWindows7Release))
+	text := string(mediaMTXConfigForRelease(cfg, mediaMTXWindows7Release))
 	for _, required := range []string{
 		"protocols: [tcp]",
 		"rtmp: no",
@@ -49,7 +49,7 @@ func TestMediaMTXModernConfigDisablesUnusedServers(t *testing.T) {
 	cfg := defaultConfig()
 	cfg.LocalRTSPPath = "screen"
 	cfg.LocalRTSPPort = 8554
-	text := string(mediaMTXConfig(cfg, mediaMTXCurrentRelease))
+	text := string(mediaMTXConfigForRelease(cfg, mediaMTXCurrentRelease))
 	for _, required := range []string{
 		"rtspTransports: [tcp]",
 		"rtmp: false",
