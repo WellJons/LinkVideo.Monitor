@@ -19,10 +19,25 @@ import (
 	"time"
 )
 
-const (
-	mediaMTXVersion = "1.19.3"
-	mediaMTXURL     = "https://github.com/bluenviron/mediamtx/releases/download/v" + mediaMTXVersion + "/mediamtx_v" + mediaMTXVersion + "_windows_amd64.zip"
-	mediaMTXSHA256  = "5d82148d1032a6a190d9909a2997d9989457aaadf49af87dd02cd4512d31bebe"
+type mediaMTXRelease struct {
+	Version      string
+	URL          string
+	SHA256       string
+	LegacyConfig bool
+}
+
+var (
+	mediaMTXCurrentRelease = mediaMTXRelease{
+		Version: "1.19.3",
+		URL:     "https://github.com/bluenviron/mediamtx/releases/download/v1.19.3/mediamtx_v1.19.3_windows_amd64.zip",
+		SHA256:  "5d82148d1032a6a190d9909a2997d9989457aaadf49af87dd02cd4512d31bebe",
+	}
+	mediaMTXWindows7Release = mediaMTXRelease{
+		Version:      "1.0.3",
+		URL:          "https://github.com/bluenviron/mediamtx/releases/download/v1.0.3/mediamtx_v1.0.3_windows_amd64.zip",
+		SHA256:       "f3cffd7ec6113895e8742346644cd5856bd007e6535797ef41e4303cf4bc0d6c",
+		LegacyConfig: true,
+	}
 )
 
 var invalidStreamPath = regexp.MustCompile(`[^A-Za-z0-9_.-]+`)
@@ -92,9 +107,63 @@ func mediaMTXDefaultPath() (string, error) {
 	return filepath.Join(filepath.Dir(exe), "mediamtx.exe"), nil
 }
 
-func downloadMediaMTX(dest string) error {
+func mediaMTXReleaseForWindows(major, minor uint32) mediaMTXRelease {
+	// Go 1.20 is the last Go release that supports Windows 7. MediaMTX 1.0.3
+	// was built with Go 1.20, while current MediaMTX releases are built with a
+	// newer Go runtime and cannot start on Windows 7 / Server 2008 R2.
+	if major == 6 && minor == 1 {
+		return mediaMTXWindows7Release
+	}
+	return mediaMTXCurrentRelease
+}
+
+func selectedMediaMTXRelease() mediaMTXRelease {
+	major, minor, _ := windowsVersion()
+	return mediaMTXReleaseForWindows(major, minor)
+}
+
+func mediaMTXVersionMarker(dest string) string {
+	return dest + ".linkvideo-version"
+}
+
+func mediaMTXMarkerVersion(dest string) string {
+	data, err := os.ReadFile(mediaMTXVersionMarker(dest))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+func managedMediaMTXNeedsInstall(dest string, release mediaMTXRelease) (bool, error) {
+	info, err := os.Stat(dest)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return true, nil
+		}
+		return false, err
+	}
+	if info.IsDir() {
+		return false, fmt.Errorf("путь локального RTSP-сервера является папкой: %s", dest)
+	}
+
+	installed := mediaMTXMarkerVersion(dest)
+	if installed == release.Version {
+		return false, nil
+	}
+	if installed != "" {
+		return true, nil
+	}
+
+	// Releases before 0.8.12 did not create a version marker. On modern
+	// Windows that unmarked binary is the existing 1.19.3 component and can be
+	// kept. On Windows 7 it is exactly the incompatible binary that must be
+	// replaced once with the Go 1.20-compatible release.
+	return release.LegacyConfig, nil
+}
+
+func downloadMediaMTX(dest string, release mediaMTXRelease) error {
 	client := &http.Client{Timeout: 3 * time.Minute}
-	req, err := http.NewRequest(http.MethodGet, mediaMTXURL, nil)
+	req, err := http.NewRequest(http.MethodGet, release.URL, nil)
 	if err != nil {
 		return err
 	}
@@ -123,7 +192,7 @@ func downloadMediaMTX(dest string) error {
 	if err := tmpZip.Close(); err != nil {
 		return err
 	}
-	if got := hex.EncodeToString(hash.Sum(nil)); !strings.EqualFold(got, mediaMTXSHA256) {
+	if got := hex.EncodeToString(hash.Sum(nil)); !strings.EqualFold(got, release.SHA256) {
 		return fmt.Errorf("контрольная сумма компонента локальной трансляции не совпала: %s", got)
 	}
 
@@ -170,12 +239,50 @@ func downloadMediaMTX(dest string) error {
 		_ = os.Remove(tmpDest)
 		return err
 	}
+	if err := os.WriteFile(mediaMTXVersionMarker(dest), []byte(release.Version+"\n"), 0o644); err != nil {
+		return fmt.Errorf("компонент установлен, но не удалось сохранить его версию: %w", err)
+	}
 	return nil
 }
 
-func mediaMTXConfig(cfg Config) []byte {
+func mediaMTXConfig(cfg Config, release mediaMTXRelease) []byte {
 	path := sanitizeStreamPath(cfg.LocalRTSPPath)
-	return []byte(fmt.Sprintf(`authMethod: internal
+	if release.LegacyConfig {
+		return []byte(fmt.Sprintf(`logLevel: info
+logDestinations: [stdout]
+api: no
+metrics: no
+pprof: no
+rtsp: yes
+protocols: [tcp]
+rtspAddress: :%d
+rtmp: no
+hls: no
+webrtc: no
+srt: no
+paths:
+  "%s":
+    source: publisher
+    publishIPs: [127.0.0.1, "::1"]
+    readIPs: []
+`, cfg.LocalRTSPPort, path))
+	}
+
+	return []byte(fmt.Sprintf(`logLevel: info
+logDestinations: [stdout]
+api: false
+metrics: false
+pprof: false
+playback: false
+rtsp: true
+rtspTransports: [tcp]
+rtspAddress: :%d
+rtmp: false
+hls: false
+webrtc: false
+srt: false
+moq: false
+authMethod: internal
 authInternalUsers:
   - user: any
     ips: ["127.0.0.1", "::1"]
@@ -189,12 +296,10 @@ authInternalUsers:
     permissions:
       - action: read
         path: "%s"
-logLevel: info
-rtspAddress: :%d
 paths:
   "%s":
     source: publisher
-`, path, path, path, cfg.LocalRTSPPort, path))
+`, cfg.LocalRTSPPort, path, path, path, path))
 }
 
 func probeRTSP(address, streamURL string, timeout time.Duration) error {
@@ -220,6 +325,7 @@ func probeRTSP(address, streamURL string, timeout time.Duration) error {
 func (a *app) ensureMediaMTX(cfg Config) error {
 	address := fmt.Sprintf("127.0.0.1:%d", cfg.LocalRTSPPort)
 	streamURL := localRTSPURL(cfg, "127.0.0.1")
+	release := selectedMediaMTXRelease()
 
 	a.mu.Lock()
 	runningCmd := a.mediaCmd
@@ -247,34 +353,41 @@ func (a *app) ensureMediaMTX(cfg Config) error {
 		return fmt.Errorf("порт %d занят другой программой и не является RTSP-сервером", cfg.LocalRTSPPort)
 	}
 
-	exe := resolveExecutable(cfg.MediaMTXPath)
-	if _, err := os.Stat(exe); err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
+	managedDefault := strings.EqualFold(strings.TrimSpace(cfg.MediaMTXPath), "mediamtx.exe")
+	var exe string
+	if managedDefault {
+		var err error
+		exe, err = mediaMTXDefaultPath()
+		if err != nil {
 			return err
 		}
-		// Стандартный компонент устанавливается автоматически при первом
-		// использовании локальной RTSP-трансляции.
-		if filepath.IsAbs(cfg.MediaMTXPath) || !strings.EqualFold(filepath.Base(cfg.MediaMTXPath), "mediamtx.exe") {
-			return fmt.Errorf("локальный RTSP-сервер не найден: %s", exe)
+		needsInstall, err := managedMediaMTXNeedsInstall(exe, release)
+		if err != nil {
+			return err
 		}
-		var pathErr error
-		exe, pathErr = mediaMTXDefaultPath()
-		if pathErr != nil {
-			return pathErr
+		if needsInstall {
+			a.appendLog(fmt.Sprintf("Установка компонента локальной RTSP-трансляции MediaMTX %s…", release.Version))
+			if err := downloadMediaMTX(exe, release); err != nil {
+				return fmt.Errorf("не удалось автоматически установить локальную RTSP-камеру: %w", err)
+			}
+			a.appendLog(fmt.Sprintf("Компонент локальной RTSP-трансляции MediaMTX %s установлен", release.Version))
 		}
-		a.appendLog("Установка компонента локальной RTSP-трансляции…")
-		if err := downloadMediaMTX(exe); err != nil {
-			return fmt.Errorf("не удалось автоматически установить локальную RTSP-камеру: %w", err)
+	} else {
+		exe = resolveExecutable(cfg.MediaMTXPath)
+		if _, err := os.Stat(exe); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("локальный RTSP-сервер не найден: %s", exe)
+			}
+			return err
 		}
-		a.appendLog("Компонент локальной RTSP-трансляции установлен")
 	}
 
 	cfgFile := filepath.Join(filepath.Dir(a.cfgPath), "mediamtx.yml")
-	content := mediaMTXConfig(cfg)
-	if err := os.MkdirAll(filepath.Dir(cfgFile), 0755); err != nil {
+	content := mediaMTXConfig(cfg, release)
+	if err := os.MkdirAll(filepath.Dir(cfgFile), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(cfgFile, content, 0644); err != nil {
+	if err := os.WriteFile(cfgFile, content, 0o644); err != nil {
 		return err
 	}
 
