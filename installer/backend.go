@@ -131,6 +131,19 @@ func installProduct(opts installOptions, progress progressFunc) (string, []strin
 	return appPath, warnings, nil
 }
 
+func payloadTargetPath(dest, archiveName string) (string, string, error) {
+	clean := filepath.Clean(strings.ReplaceAll(archiveName, "/", string(filepath.Separator)))
+	if clean == "." || filepath.IsAbs(clean) || filepath.VolumeName(clean) != "" {
+		return "", "", fmt.Errorf("недопустимый путь в пакете: %s", archiveName)
+	}
+	target := filepath.Join(dest, clean)
+	rel, err := filepath.Rel(filepath.Clean(dest), filepath.Clean(target))
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", "", fmt.Errorf("недопустимый путь в пакете: %s", archiveName)
+	}
+	return clean, target, nil
+}
+
 func extractPayload(dest string, onFile func(done, total int, name string)) error {
 	if len(payload) == 0 {
 		return errors.New("установочный пакет не содержит файлов программы")
@@ -147,11 +160,10 @@ func extractPayload(dest string, onFile func(done, total int, name string)) erro
 	}
 	done := 0
 	for _, f := range zr.File {
-		clean := filepath.Clean(f.Name)
-		if clean == "." || filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
-			return fmt.Errorf("недопустимый путь в пакете: %s", f.Name)
+		clean, target, err := payloadTargetPath(dest, f.Name)
+		if err != nil {
+			return err
 		}
-		target := filepath.Join(dest, clean)
 		if f.FileInfo().IsDir() {
 			if err := os.MkdirAll(target, 0o755); err != nil {
 				return err

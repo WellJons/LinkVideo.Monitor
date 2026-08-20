@@ -36,3 +36,10 @@ func TestOverlayKeepsPositionOnSelectedMonitor(t *testing.T) {
 		t.Fatalf("position unexpectedly changed: %d,%d", x, y)
 	}
 }
+
+func TestOverlayKeepsPositionOnMonitorAboveAndLeft(t *testing.T) {
+	x, y := overlayPositionForCaptureMonitor(-1500, -700, -1920, -1080, 1920, 1080, 214, 36)
+	if x != -1500 || y != -700 {
+		t.Fatalf("negative monitor position unexpectedly changed: %d,%d", x, y)
+	}
+}

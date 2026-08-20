@@ -175,7 +175,7 @@ func overlayPositionForCaptureMonitor(x, y, monitorX, monitorY, monitorWidth, mo
 	}
 	cx := x + overlayWidth/2
 	cy := y + overlayHeight/2
-	inside := x >= 0 || y >= 0
+	inside := !(x == -1 && y == -1)
 	inside = inside && cx >= monitorX && cx < monitorX+monitorWidth && cy >= monitorY && cy < monitorY+monitorHeight
 	if inside {
 		return x, y

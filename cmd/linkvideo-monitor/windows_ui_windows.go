@@ -419,7 +419,7 @@ func placeOverlayInteractive(x, y int) (OverlayPosition, error) {
 
 func runOverlayWindow(x, y int, placing bool) error {
 	width, height := 214, 36
-	if x < 0 || y < 0 {
+	if x == -1 && y == -1 {
 		x, y = defaultOverlayPosition(width, height)
 	} else {
 		x, y = safeOverlayPosition(x, y, width, height)

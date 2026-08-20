@@ -554,12 +554,6 @@ func normalizeConfig(c *Config) {
 	// OverlayText is kept only to load configs from 0.3.x. The current
 	// indicator text is fixed in the helper; legacy custom text is ignored.
 	c.OverlayText = ""
-	if c.OverlayX < -1 {
-		c.OverlayX = -1
-	}
-	if c.OverlayY < -1 {
-		c.OverlayY = -1
-	}
 	if c.Width < 2 {
 		c.Width = 1920
 	}

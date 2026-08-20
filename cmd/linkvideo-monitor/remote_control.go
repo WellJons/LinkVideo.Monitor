@@ -325,7 +325,7 @@ func (a *app) applyRemoteResponse(resp remoteSyncResponse) error {
 		commandID = commandIDString(resp.Command.ID)
 		action = strings.ToLower(strings.TrimSpace(resp.Command.Action))
 		if action != "" && commandID == "" {
-			return errors.New("у дистанционной команды отсутствует обязательный id")
+			return errors.New("у дистанционной команды отсутствует корректный обязательный id")
 		}
 		switch action {
 		case "", "start_stream", "stop_stream", "restart_stream", "restart_application":
@@ -338,28 +338,32 @@ func (a *app) applyRemoteResponse(resp remoteSyncResponse) error {
 	before := a.cfg
 	a.mu.Unlock()
 	after := before
-	if resp.Settings != nil {
+
+	// Settings are monotonic. An old/equal revision can be replayed by a proxy or
+	// delayed request and must never roll a client back.
+	settingsApplied := resp.Settings != nil && resp.Revision > before.RemoteRevision
+	if settingsApplied {
 		if err := a.applyRemoteSettingsValidated(&after, *resp.Settings); err != nil {
 			return err
 		}
-	}
-	if resp.Revision > after.RemoteRevision {
+		after.RemoteRevision = resp.Revision
+	} else if resp.Revision > after.RemoteRevision {
+		// A revision can advance without settings (for example command-only server
+		// state). Preserve monotonic acknowledgement of that server revision.
 		after.RemoteRevision = resp.Revision
 	}
+
 	newCommand := action != "" && commandID != before.RemoteLastCommandID
-	if newCommand {
-		after.RemoteLastCommandID = commandID
-	}
 	normalizeConfig(&after)
 	configChanged := !reflect.DeepEqual(streamConfigView(before), streamConfigView(after))
 	metadataChanged := !reflect.DeepEqual(before, after)
 
 	a.mu.Lock()
-	// Rebase on the latest hidden metadata in case another sync/save completed.
 	current := a.cfg
-	after.RemoteAPIURL = current.RemoteAPIURL
-	after.RemoteControlEnabled = current.RemoteControlEnabled
-	after.RemoteSyncIntervalMin = current.RemoteSyncIntervalMin
+	if !reflect.DeepEqual(current, before) {
+		a.mu.Unlock()
+		return errors.New("локальные настройки изменились во время синхронизации; ответ API будет применён при следующей попытке")
+	}
 	a.cfg = after
 	if metadataChanged {
 		if err := a.saveConfigLocked(); err != nil {
@@ -385,17 +389,34 @@ func (a *app) applyRemoteResponse(resp remoteSyncResponse) error {
 	}
 
 	if newCommand {
+		var err error
 		switch action {
 		case "start_stream":
-			return a.start()
+			err = a.start()
 		case "stop_stream":
 			a.stop()
-			return nil
 		case "restart_stream":
-			return a.restart()
+			err = a.restart()
 		case "restart_application":
-			return a.scheduleProcessRestart()
+			err = a.scheduleProcessRestart()
 		}
+		if err != nil {
+			return err
+		}
+
+		// ACK only after the action has been accepted successfully. If persisting
+		// the ACK fails, the server may retry an idempotent command rather than
+		// losing a command that never actually ran.
+		a.mu.Lock()
+		previousID := a.cfg.RemoteLastCommandID
+		a.cfg.RemoteLastCommandID = commandID
+		if err := a.saveConfigLocked(); err != nil {
+			a.cfg.RemoteLastCommandID = previousID
+			a.mu.Unlock()
+			return fmt.Errorf("не удалось сохранить подтверждение дистанционной команды: %w", err)
+		}
+		a.mu.Unlock()
+		return nil
 	}
 	if configChanged && wasDesired {
 		return a.restart()
@@ -591,7 +612,7 @@ func commandIDString(raw json.RawMessage) string {
 	if json.Unmarshal(raw, &n) == nil {
 		return n.String()
 	}
-	return trimmed
+	return ""
 }
 
 func (a *app) setRemoteError(err error) {
