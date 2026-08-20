@@ -236,8 +236,25 @@ func (a *app) processFFmpegLine(prefix, line string) bool {
 	}
 	if strings.Contains(lower, "failed to capture image") || strings.Contains(lower, "error during demuxing") {
 		a.markFatalCapture("Windows временно заблокировала захват экрана")
-	} else if strings.Contains(lower, "failed reading rtsp data") || strings.Contains(lower, "broken pipe") {
-		a.markPendingRestart("RTSP-соединение разорвано (Broken pipe)", false)
+	} else if reason := ffmpegTransportFailureReason(lower); reason != "" {
+		a.markPendingRestart(reason, false)
 	}
 	return false
+}
+
+func ffmpegTransportFailureReason(lower string) string {
+	switch {
+	case strings.Contains(lower, "broken pipe"):
+		return "RTSP/TCP-соединение оборвалось: Broken pipe (EPIPE); источник разрыва не определён (сеть, прокси или RTSP-сервер)"
+	case strings.Contains(lower, "connection reset by peer"):
+		return "RTSP/TCP-соединение сброшено (Connection reset by peer); источник сброса не определён"
+	case strings.Contains(lower, "connection timed out") || strings.Contains(lower, "operation timed out"):
+		return "RTSP/TCP-соединение завершилось по тайм-ауту"
+	case strings.Contains(lower, "connection refused"):
+		return "RTSP/TCP-подключение отклонено удалённым узлом"
+	case strings.Contains(lower, "failed reading rtsp data"):
+		return "Ошибка обмена данными RTSP; источник разрыва не определён"
+	default:
+		return ""
+	}
 }
