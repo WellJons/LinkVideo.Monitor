@@ -65,15 +65,17 @@ func (a *app) verifyAdminPassword(password string) (string, error) {
 	a.adminFailures = 0
 	a.adminBlockedUntil = time.Time{}
 	defer a.mu.Unlock()
-	return a.issueAdminTokenLocked(), nil
+	return a.issueAdminTokenLocked()
 }
 
-func (a *app) issueAdminTokenLocked() string {
+func (a *app) issueAdminTokenLocked() (string, error) {
 	if a.adminTokens == nil {
 		a.adminTokens = make(map[string]time.Time)
 	}
 	raw := make([]byte, 32)
-	_, _ = rand.Read(raw)
+	if _, err := rand.Read(raw); err != nil {
+		return "", fmt.Errorf("не удалось создать защищённый токен администратора: %w", err)
+	}
 	token := base64.RawURLEncoding.EncodeToString(raw)
 	now := time.Now()
 	for k, expiry := range a.adminTokens {
@@ -82,7 +84,7 @@ func (a *app) issueAdminTokenLocked() string {
 		}
 	}
 	a.adminTokens[token] = now.Add(adminTokenLifetime)
-	return token
+	return token, nil
 }
 
 func (a *app) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
@@ -141,8 +143,4 @@ func (a *app) handleAuthVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"token": token})
-}
-
-func authDebugString(_ string) string {
-	return fmt.Sprintf("admin auth: managed=%t", validEmbeddedAdminDigest())
 }
