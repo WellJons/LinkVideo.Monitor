@@ -18,6 +18,7 @@ This document accompanies the final 0.8.12 audit branch.
 - Remote endpoint validation and secure capture request validation retained.
 - Obsolete window-capture and superseded encoder-selection code removed.
 - Application version marker finalized from `0.8.12-beta` to `0.8.12`.
+- Final installer static-analysis findings have been resolved; this commit triggers the release-gate validation on the cleaned tree.
 
 ## Validation gates
 
