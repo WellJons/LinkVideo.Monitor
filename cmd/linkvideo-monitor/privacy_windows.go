@@ -281,6 +281,10 @@ func (t *windowsPrivacyTracker) remember(hwnd uintptr, title, signature string, 
 		if rectDistance(item.Rect, rect) <= 3 {
 			rect = item.Rect
 		}
+		if item.Element == 0 && element != 0 {
+			comAddRef(element)
+			item.Element = element
+		}
 		item.Rect = rect
 		item.Title = title
 		item.Expires = now.Add(2 * time.Minute)

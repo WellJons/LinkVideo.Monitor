@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   windows-build:
     runs-on: windows-latest
@@ -22,3 +25,29 @@ jobs:
       - name: Build installer and uninstaller
         shell: cmd
         run: scripts\windows\build-installer.cmd
+      - name: Upload test binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: LinkVideo-Monitor-0.8.12-current
+          if-no-files-found: error
+          path: |
+            build/LinkVideo.Monitor.exe
+            build/LinkVideo.Monitor_0.8.12_Setup.exe
+            build/Uninstall.exe
+
+  source-snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Upload source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: LinkVideo-Monitor-source-snapshot
+          if-no-files-found: error
+          path: |
+            cmd
+            installer
+            scripts
+            tools
+            go.mod
+            go.work

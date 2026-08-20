@@ -58,69 +58,171 @@ func defaultInstallDir() string {
 	return `C:\Program Files\LinkVideo.Monitor`
 }
 
+func findRollbackApp(roots ...string) string {
+	for _, root := range roots {
+		root = strings.TrimSpace(root)
+		if root == "" || filepath.Clean(root) == "." {
+			continue
+		}
+		for _, name := range []string{"LinkVideo.Monitor.exe", "LinkVideo.ScreenSender.exe"} {
+			candidate := filepath.Join(root, name)
+			if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+				return candidate
+			}
+		}
+	}
+	return ""
+}
+
+func renameInstallDirectoryWithRetry(from, to string) error {
+	var lastErr error
+	for attempt := 0; attempt < 20; attempt++ {
+		if err := os.Rename(from, to); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	return lastErr
+}
+
 func installProduct(opts installOptions, progress progressFunc) (string, []string, error) {
 	local := os.Getenv("LOCALAPPDATA")
 	roaming := os.Getenv("APPDATA")
 	if local == "" || roaming == "" {
-		return "", nil, errors.New("Windows не вернула пути LOCALAPPDATA и APPDATA")
+		return "", nil, errors.New("пути LOCALAPPDATA и APPDATA не предоставлены Windows")
 	}
+
 	dest := defaultInstallDir()
+	stage := dest + ".install-new"
+	backup := dest + ".install-old"
 	legacyLocalDest := filepath.Join(local, "Programs", "LinkVideo.Monitor")
 	oldDest := filepath.Join(local, "Programs", "LinkVideo.ScreenSender")
-	warnings := make([]string, 0, 3)
 	legacyProgramFiles := filepath.Join(os.Getenv("ProgramFiles"), "LinkVideo.Monitor")
 	legacyProgramFilesX86 := filepath.Join(os.Getenv("ProgramFiles(x86)"), "LinkVideo.Monitor")
-	appPath := filepath.Join(dest, "LinkVideo.Monitor.exe")
+	warnings := make([]string, 0, 3)
 
-	progress(5, "Подготовка к установке…")
+	progress(5, "Подготовка файлов…")
+	_ = os.RemoveAll(stage)
+	if err := os.MkdirAll(stage, 0o755); err != nil {
+		return "", warnings, fmt.Errorf("не удалось создать временную папку установки: %w", err)
+	}
+	if err := extractPayload(stage, func(done, total int, name string) {
+		percent := 8
+		if total > 0 {
+			percent += done * 50 / total
+		}
+		progress(percent, "Подготовка: "+name)
+	}); err != nil {
+		_ = os.RemoveAll(stage)
+		return "", warnings, fmt.Errorf("не удалось подготовить пакет установки: %w", err)
+	}
+	_ = os.Remove(filepath.Join(stage, "LinkVideo.ScreenOverlay.exe"))
+	_ = os.Remove(filepath.Join(stage, "LinkVideo.AudioLoopback.exe"))
+	stagedApp := filepath.Join(stage, "LinkVideo.Monitor.exe")
+	if info, err := os.Stat(stagedApp); err != nil || info.IsDir() {
+		_ = os.RemoveAll(stage)
+		if err == nil {
+			err = errors.New("путь основного файла является папкой")
+		}
+		return "", warnings, fmt.Errorf("основной файл программы отсутствует в подготовленном пакете: %w", err)
+	}
+
+	rollbackApp := findRollbackApp(dest, legacyLocalDest, oldDest, legacyProgramFiles, legacyProgramFilesX86)
+	_, destErr := os.Stat(dest)
+	hadDest := destErr == nil
+	if destErr != nil && !os.IsNotExist(destErr) {
+		_ = os.RemoveAll(stage)
+		return "", warnings, fmt.Errorf("не удалось проверить текущую установку: %w", destErr)
+	}
+
+	progress(61, "Остановка предыдущей версии…")
 	if existingInstallation() {
-		progress(9, "Остановка фоновой службы…")
 		if err := prepareUpgradeElevated(); err != nil {
+			_ = os.RemoveAll(stage)
 			return "", warnings, fmt.Errorf("не удалось остановить фоновую службу перед обновлением: %w", err)
 		}
 	}
 	stopInstalledProcesses(dest, legacyLocalDest, oldDest, legacyProgramFiles, legacyProgramFilesX86)
 
-	progress(14, "Создание папки программы…")
-	if err := os.MkdirAll(dest, 0o755); err != nil {
-		return "", warnings, fmt.Errorf("не удалось создать папку установки: %w", err)
-	}
-	if err := extractPayload(dest, func(done, total int, name string) {
-		percent := 16
-		if total > 0 {
-			percent += done * 54 / total
+	_ = os.RemoveAll(backup)
+	if hadDest {
+		if err := renameInstallDirectoryWithRetry(dest, backup); err != nil {
+			_ = os.RemoveAll(stage)
+			return "", warnings, fmt.Errorf("не удалось подготовить откат предыдущей версии: %w", err)
 		}
-		progress(percent, "Копирование: "+name)
-	}); err != nil {
-		return "", warnings, err
+	}
+	if err := renameInstallDirectoryWithRetry(stage, dest); err != nil {
+		if hadDest {
+			_ = renameInstallDirectoryWithRetry(backup, dest)
+		}
+		return "", warnings, fmt.Errorf("не удалось активировать подготовленную версию: %w", err)
 	}
 
-	_ = os.Remove(filepath.Join(dest, "LinkVideo.ScreenOverlay.exe"))
-	_ = os.Remove(filepath.Join(dest, "LinkVideo.AudioLoopback.exe"))
-	if _, err := os.Stat(appPath); err != nil {
-		return "", warnings, fmt.Errorf("основной файл программы не найден после распаковки: %w", err)
+	appPath := filepath.Join(dest, "LinkVideo.Monitor.exe")
+	rollback := func(cause error) error {
+		stopCaptureServiceForUpgrade()
+		stopInstalledProcesses(dest)
+		failedDir := dest + ".install-failed"
+		_ = os.RemoveAll(failedDir)
+		if _, err := os.Stat(dest); err == nil {
+			if moveErr := renameInstallDirectoryWithRetry(dest, failedDir); moveErr != nil {
+				return fmt.Errorf("%v; дополнительно не удалось изолировать неудачную новую версию: %w", cause, moveErr)
+			}
+		}
+		if hadDest {
+			if restoreErr := renameInstallDirectoryWithRetry(backup, dest); restoreErr != nil {
+				return fmt.Errorf("%v; дополнительно не удалось вернуть предыдущие файлы: %w", cause, restoreErr)
+			}
+		}
+		_ = os.RemoveAll(failedDir)
+
+		recoveryApp := rollbackApp
+		if hadDest && recoveryApp != "" && strings.EqualFold(filepath.Clean(filepath.Dir(recoveryApp)), filepath.Clean(dest)) {
+			recoveryApp = filepath.Join(dest, filepath.Base(recoveryApp))
+		}
+		if recoveryApp != "" {
+			if info, err := os.Stat(recoveryApp); err == nil && !info.IsDir() {
+				if serviceErr := installUACServiceElevated(recoveryApp); serviceErr != nil {
+					return fmt.Errorf("%v; предыдущие файлы возвращены, но служба не восстановилась: %w", cause, serviceErr)
+				}
+				if strings.EqualFold(filepath.Base(recoveryApp), "LinkVideo.Monitor.exe") {
+					_ = registerUninstall(recoveryApp, filepath.Dir(recoveryApp))
+				}
+				return cause
+			}
+		}
+
+		_ = runHidden("sc.exe", "stop", "LinkVideoMonitorCapture")
+		_ = runHidden("sc.exe", "delete", "LinkVideoMonitorCapture")
+		_ = runHidden("reg.exe", "delete", `HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\LinkVideo Monitor`, "/f")
+		return cause
 	}
 
-	progress(73, "Создание ярлыков…")
+	progress(72, "Регистрация LinkVideo Monitor в Windows…")
+	if err := registerUninstall(appPath, dest); err != nil {
+		return "", warnings, rollback(fmt.Errorf("не удалось зарегистрировать удаление программы: %w", err))
+	}
+	progress(80, "Установка фоновой службы…")
+	if err := installUACServiceElevated(appPath); err != nil {
+		return "", warnings, rollback(fmt.Errorf("не удалось установить службу защищённого рабочего стола: %w", err))
+	}
+
+	progress(87, "Создание ярлыков…")
 	if err := createShortcuts(appPath, dest, opts.DesktopShortcut); err != nil {
 		warnings = append(warnings, "не удалось создать один из ярлыков")
 	}
-	progress(78, "Настройка запуска вместе с Windows…")
+	progress(91, "Настройка запуска вместе с Windows…")
 	if err := setStartup(appPath, opts.AutoStart); err != nil {
 		warnings = append(warnings, "не удалось настроить автозапуск Windows")
 	}
-	progress(82, "Регистрация LinkVideo Monitor в Windows…")
+	progress(94, "Регистрация ссылки LinkVideo…")
 	if err := registerURLProtocol(appPath); err != nil {
 		warnings = append(warnings, "не удалось зарегистрировать ссылку linkvideomonitor:")
 	}
-	if err := registerUninstall(appPath, dest); err != nil {
-		return "", warnings, fmt.Errorf("не удалось зарегистрировать удаление программы: %w", err)
-	}
 
-	progress(88, "Установка фоновой службы…")
-	if err := installUACServiceElevated(appPath); err != nil {
-		return "", warnings, fmt.Errorf("не удалось установить службу защищённого рабочего стола: %w", err)
-	}
+	_ = os.RemoveAll(backup)
 	removeLegacyRegistration(roaming)
 	for _, legacyDir := range []string{legacyLocalDest, oldDest} {
 		if !strings.EqualFold(filepath.Clean(legacyDir), filepath.Clean(dest)) {
@@ -129,6 +231,23 @@ func installProduct(opts installOptions, progress progressFunc) (string, []strin
 	}
 	progress(100, "Установка завершена")
 	return appPath, warnings, nil
+}
+
+func payloadTargetPath(dest, archiveName string) (string, string, error) {
+	normalized := strings.ReplaceAll(strings.TrimSpace(archiveName), "/", string(filepath.Separator))
+	if normalized == "" || strings.HasPrefix(normalized, string(filepath.Separator)) {
+		return "", "", fmt.Errorf("недопустимый путь в пакете: %s", archiveName)
+	}
+	clean := filepath.Clean(normalized)
+	if clean == "." || filepath.IsAbs(clean) || filepath.VolumeName(clean) != "" {
+		return "", "", fmt.Errorf("недопустимый путь в пакете: %s", archiveName)
+	}
+	target := filepath.Join(dest, clean)
+	rel, err := filepath.Rel(filepath.Clean(dest), filepath.Clean(target))
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", "", fmt.Errorf("недопустимый путь в пакете: %s", archiveName)
+	}
+	return clean, target, nil
 }
 
 func extractPayload(dest string, onFile func(done, total int, name string)) error {
@@ -147,11 +266,10 @@ func extractPayload(dest string, onFile func(done, total int, name string)) erro
 	}
 	done := 0
 	for _, f := range zr.File {
-		clean := filepath.Clean(f.Name)
-		if clean == "." || filepath.IsAbs(clean) || strings.HasPrefix(clean, "..") {
-			return fmt.Errorf("недопустимый путь в пакете: %s", f.Name)
+		clean, target, err := payloadTargetPath(dest, f.Name)
+		if err != nil {
+			return err
 		}
-		target := filepath.Join(dest, clean)
 		if f.FileInfo().IsDir() {
 			if err := os.MkdirAll(target, 0o755); err != nil {
 				return err
@@ -247,7 +365,7 @@ func createShortcuts(appPath, dest string, desktop bool) error {
 	roaming := strings.TrimSpace(os.Getenv("APPDATA"))
 	profile := strings.TrimSpace(os.Getenv("USERPROFILE"))
 	if roaming == "" || profile == "" {
-		return errors.New("Windows не вернула путь профиля пользователя")
+		return errors.New("путь профиля пользователя не предоставлен Windows")
 	}
 	startMenuDir := filepath.Join(roaming, `Microsoft\Windows\Start Menu\Programs`)
 	desktopDir := filepath.Join(profile, "Desktop")
@@ -406,7 +524,7 @@ func installUACServiceWorker(appPath string) error {
 	}
 	programData := os.Getenv("PROGRAMDATA")
 	if programData == "" {
-		return errors.New("Windows не вернула путь PROGRAMDATA")
+		return errors.New("путь PROGRAMDATA не предоставлен Windows")
 	}
 	serviceDir := filepath.Join(programData, "LinkVideo.Monitor", "Service")
 	sessionsDir := filepath.Join(programData, "LinkVideo.Monitor", "Sessions")
@@ -416,7 +534,10 @@ func installUACServiceWorker(appPath string) error {
 	if err := os.WriteFile(filepath.Join(serviceDir, "app-path.txt"), []byte(filepath.Clean(appPath)+"\r\n"), 0o644); err != nil {
 		return fmt.Errorf("не удалось сохранить путь фонового агента: %w", err)
 	}
-	if err := os.MkdirAll(sessionsDir, 0o777); err != nil {
+	// Service installation happens with the Monitor stopped, so stale request
+	// files can be discarded and the directory ACL rebuilt from a known state.
+	_ = os.RemoveAll(sessionsDir)
+	if err := os.MkdirAll(sessionsDir, 0o700); err != nil {
 		return err
 	}
 	servicePath := filepath.Join(serviceDir, "LinkVideo.Monitor.Service.exe")
@@ -426,7 +547,8 @@ func installUACServiceWorker(appPath string) error {
 	if err := copyFile(appPath, servicePath); err != nil {
 		return fmt.Errorf("не удалось обновить файл службы: %w", err)
 	}
-	_ = runHidden("icacls.exe", sessionsDir, "/grant", "*S-1-5-32-545:(OI)(CI)M", "/T", "/C")
+	_ = runHidden("icacls.exe", sessionsDir, "/inheritance:r")
+	_ = runHidden("icacls.exe", sessionsDir, "/grant:r", "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F", "*S-1-3-0:(OI)(CI)(IO)F", "*S-1-5-32-545:(RX,WD,AD)")
 	_ = runHidden("sc.exe", "delete", "LinkVideoMonitorCapture")
 	time.Sleep(400 * time.Millisecond)
 	binPath := `"` + servicePath + `" --uac-service`
@@ -568,7 +690,7 @@ func uninstallProduct(removeData bool, progress progressFunc) error {
 	}
 	progress(96, "Завершение удаления…")
 	if len(remaining) > 0 {
-		return fmt.Errorf("Windows не позволила удалить некоторые файлы:\n%s", strings.Join(remaining, "\n"))
+		return fmt.Errorf("некоторые файлы не удалось удалить в Windows:\n%s", strings.Join(remaining, "\n"))
 	}
 	progress(100, "LinkVideo Monitor удалён")
 	return nil

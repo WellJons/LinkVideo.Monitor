@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -24,11 +23,6 @@ const (
 	processSetInformation          = 0x0200
 	processQueryLimitedInformation = 0x1000
 	belowNormalPriorityClass       = 0x00004000
-
-	gwOwner           = 4
-	appWsExToolWindow = 0x00000080
-	wsExAppWindow     = 0x00040000
-	dwmwaCloaked      = 14
 )
 
 var (
@@ -39,20 +33,13 @@ var (
 	procCloseHandle                = kernel32Platform.NewProc("CloseHandle")
 	procQueryFullProcessImageNameW = kernel32Platform.NewProc("QueryFullProcessImageNameW")
 
-	procEnumWindows              = user32.NewProc("EnumWindows")
-	procIsWindowVisible          = user32.NewProc("IsWindowVisible")
 	procGetWindowTextLengthW     = user32.NewProc("GetWindowTextLengthW")
 	procGetWindowTextW           = user32.NewProc("GetWindowTextW")
 	procGetWindowRect            = user32.NewProc("GetWindowRect")
 	procGetWindowThreadProcessId = user32.NewProc("GetWindowThreadProcessId")
-	procGetWindowLongPtrW        = user32.NewProc("GetWindowLongPtrW")
-	procGetWindow                = user32.NewProc("GetWindow")
-	procGetClassNameW            = user32.NewProc("GetClassNameW")
 
-	dwmapi                    = syscall.NewLazyDLL("dwmapi.dll")
-	procDwmGetWindowAttribute = dwmapi.NewProc("DwmGetWindowAttribute")
-	shell32Platform           = syscall.NewLazyDLL("shell32.dll")
-	procShellExecuteW         = shell32Platform.NewProc("ShellExecuteW")
+	shell32Platform   = syscall.NewLazyDLL("shell32.dll")
+	procShellExecuteW = shell32Platform.NewProc("ShellExecuteW")
 )
 
 func lowerProcessPriority(pid int) {
@@ -154,15 +141,6 @@ func setSleepPrevention(enabled, keepDisplayOn bool) {
 	<-done
 }
 
-func windowClass(hwnd uintptr) string {
-	buf := make([]uint16, 256)
-	n, _, _ := procGetClassNameW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
-	if n == 0 {
-		return ""
-	}
-	return syscall.UTF16ToString(buf[:n])
-}
-
 func processImageName(pid uint32) string {
 	if pid == 0 {
 		return ""
@@ -179,98 +157,6 @@ func processImageName(pid uint32) string {
 		return ""
 	}
 	return filepath.Base(syscall.UTF16ToString(buf[:size]))
-}
-
-func isCloakedWindow(hwnd uintptr) bool {
-	var cloaked uint32
-	hr, _, _ := procDwmGetWindowAttribute.Call(hwnd, dwmwaCloaked, uintptr(unsafe.Pointer(&cloaked)), unsafe.Sizeof(cloaked))
-	return int32(hr) == 0 && cloaked != 0
-}
-
-func listWindows() ([]WindowInfo, error) {
-	result := make([]WindowInfo, 0, 32)
-	selfPID := uint32(os.Getpid())
-	excludedClasses := map[string]bool{
-		"Progman": true, "WorkerW": true, "Shell_TrayWnd": true,
-		"Shell_SecondaryTrayWnd": true, "DV2ControlHost": true,
-	}
-	excludedProcesses := map[string]bool{
-		"linkvideo.screensender.exe":  true,
-		"linkvideo.screenoverlay.exe": true,
-		"linkvideo.audioloopback.exe": true,
-	}
-
-	cb := syscall.NewCallback(func(hwnd, lparam uintptr) uintptr {
-		visible, _, _ := procIsWindowVisible.Call(hwnd)
-		if visible == 0 || isCloakedWindow(hwnd) {
-			return 1
-		}
-		className := windowClass(hwnd)
-		if excludedClasses[className] {
-			return 1
-		}
-		exStyle, _, _ := procGetWindowLongPtrW.Call(hwnd, ^uintptr(19)) // GWL_EXSTYLE = -20
-		if exStyle&appWsExToolWindow != 0 {
-			return 1
-		}
-		owner, _, _ := procGetWindow.Call(hwnd, gwOwner)
-		if owner != 0 && exStyle&wsExAppWindow == 0 {
-			return 1
-		}
-
-		n, _, _ := procGetWindowTextLengthW.Call(hwnd)
-		if n == 0 || n > 2000 {
-			return 1
-		}
-		buf := make([]uint16, int(n)+1)
-		got, _, _ := procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), uintptr(len(buf)))
-		if got == 0 {
-			return 1
-		}
-		title := strings.TrimSpace(syscall.UTF16ToString(buf))
-		if title == "" || title == "Program Manager" || strings.Contains(title, "LinkVideo — запись экрана") {
-			return 1
-		}
-
-		var r winRect
-		ok, _, _ := procGetWindowRect.Call(hwnd, uintptr(unsafe.Pointer(&r)))
-		if ok == 0 {
-			return 1
-		}
-		width, height := int(r.Right-r.Left), int(r.Bottom-r.Top)
-		if width < 160 || height < 100 {
-			return 1
-		}
-
-		var pid uint32
-		_, _, _ = procGetWindowThreadProcessId.Call(hwnd, uintptr(unsafe.Pointer(&pid)))
-		if pid == 0 || pid == selfPID {
-			return 1
-		}
-		processName := processImageName(pid)
-		if excludedProcesses[strings.ToLower(processName)] {
-			return 1
-		}
-		displayName := strings.TrimSuffix(processName, filepath.Ext(processName))
-		if displayName == "" {
-			displayName = title
-		}
-		result = append(result, WindowInfo{
-			Handle: fmt.Sprintf("0x%X", hwnd), Title: title, PID: pid,
-			Width: width, Height: height, ProcessName: processName, DisplayName: displayName,
-		})
-		return 1
-	})
-	ok, _, callErr := procEnumWindows.Call(cb, 0)
-	if ok == 0 {
-		return nil, fmt.Errorf("EnumWindows: %v", callErr)
-	}
-	sort.SliceStable(result, func(i, j int) bool {
-		ai := strings.ToLower(result[i].DisplayName + "\x00" + result[i].Title)
-		aj := strings.ToLower(result[j].DisplayName + "\x00" + result[j].Title)
-		return ai < aj
-	})
-	return result, nil
 }
 
 func runUninstaller() {

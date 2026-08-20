@@ -93,10 +93,10 @@ func (s *captureSupervisor) planSupportsDXGI() bool {
 	}
 	if s.plan.Mode == "monitor" {
 		m, ok := selectedMonitor(s.cfg, monitors)
-		return ok && m.AdapterIndex == 0
+		return ok && m.AdapterIndex == 0 && m.OutputIndex >= 0
 	}
 	for _, m := range monitors {
-		if m.AdapterIndex != 0 {
+		if m.AdapterIndex != 0 || m.OutputIndex < 0 {
 			return false
 		}
 	}
@@ -466,7 +466,7 @@ func buildDXGICaptureArgs(cfg Config, plan capturePlan) ([]string, error) {
 		return nil, fmt.Errorf("не удалось получить список мониторов: %w", err)
 	}
 	if len(monitors) == 0 {
-		return nil, errors.New("Windows не обнаружила подключённые мониторы")
+		return nil, errors.New("подключённые мониторы Windows не обнаружены")
 	}
 
 	source := func(m Monitor, label string) string {

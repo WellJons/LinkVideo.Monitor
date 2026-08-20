@@ -28,6 +28,14 @@ func transportInterruptedReason(protocol string) string {
 	}
 }
 
+func isTransportFailureReason(reason string) bool {
+	lower := strings.ToLower(strings.TrimSpace(reason))
+	return strings.HasPrefix(lower, "rtsp/tcp-") ||
+		strings.HasPrefix(lower, "ошибка обмена данными rtsp") ||
+		strings.HasPrefix(lower, "сеанс rtsp завершился") ||
+		strings.HasPrefix(lower, "сеанс rtmp завершился")
+}
+
 func reconnectTelemetryLine(encoder string, targetFPS int, streamDuration time.Duration, fps, speed float64, dup, drop int, retry time.Duration) string {
 	return fmt.Sprintf(
 		"Диагностика перед переподключением: encoder=%s, работа=%s, цель=%d FPS, фактически=%.2f FPS, speed=%.2fx, dup=%d, drop=%d, повтор через %s",

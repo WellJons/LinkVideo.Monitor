@@ -22,6 +22,8 @@ var encoderBenchmarkCache = struct {
 	items map[string]encoderBenchmarkCacheEntry
 }{items: make(map[string]encoderBenchmarkCacheEntry)}
 
+var encoderBenchmarkRunMu sync.Mutex
+
 func runtimePresetCandidates(cfg Config, fps int) []runtimePerformanceCandidate {
 	preset := strings.ToLower(strings.TrimSpace(cfg.Preset))
 	if preset == "" {
@@ -55,6 +57,22 @@ func benchmarkCacheKey(cfg Config, plan capturePlan, encoder string, candidate r
 
 func cachedEncoderBenchmark(cfg Config, plan capturePlan, encoder string, candidate runtimePerformanceCandidate) (float64, error) {
 	key := benchmarkCacheKey(cfg, plan, encoder, candidate)
+	encoderBenchmarkCache.Lock()
+	if item, ok := encoderBenchmarkCache.items[key]; ok && time.Since(item.At) < runtimeBenchmarkCacheTTL {
+		encoderBenchmarkCache.Unlock()
+		if item.ErrText != "" {
+			return item.ActualFPS, fmt.Errorf("%s", item.ErrText)
+		}
+		return item.ActualFPS, nil
+	}
+	encoderBenchmarkCache.Unlock()
+
+	encoderBenchmarkRunMu.Lock()
+	defer encoderBenchmarkRunMu.Unlock()
+
+	// A second caller can reach this point while another benchmark is running.
+	// Re-check after acquiring the global gate so the same expensive probe is
+	// never executed twice back-to-back.
 	encoderBenchmarkCache.Lock()
 	if item, ok := encoderBenchmarkCache.items[key]; ok && time.Since(item.At) < runtimeBenchmarkCacheTTL {
 		encoderBenchmarkCache.Unlock()
@@ -337,8 +355,10 @@ func probeEncoderForCapabilities(cfg Config, plan capturePlan, encoder string) e
 		fps = 15
 	}
 	if isHardwareEncoder(encoder) {
-		_, err := cachedEncoderBenchmark(cfg, plan, encoder, runtimePerformanceCandidate{FPS: fps})
-		return err
+		// Hardware encoders only need a short functional probe in the settings UI.
+		// The selected encoder still receives the full realtime benchmark before
+		// a stream starts, so capability discovery cannot overload the machine.
+		return probeVideoEncoder(cfg, encoder, plan)
 	}
 	for _, candidate := range runtimePresetCandidates(cfg, fps) {
 		if _, err := cachedEncoderBenchmark(cfg, plan, encoder, candidate); err == nil {

@@ -151,8 +151,8 @@ func TestReconnectHistoryPersistsAllReasons(t *testing.T) {
 	a := &app{restartHistoryPath: path}
 
 	a.mu.Lock()
-	items := a.appendReconnectEventLocked("сервер закрыл RTSP-соединение", 32, time.Date(2026, 7, 28, 12, 0, 0, 0, time.Local))
-	items = a.appendReconnectEventLocked("сеть временно недоступна", 1, time.Date(2026, 7, 28, 12, 5, 0, 0, time.Local))
+	_ = a.appendReconnectEventLocked("сервер закрыл RTSP-соединение", 32, time.Date(2026, 7, 28, 12, 0, 0, 0, time.Local))
+	items := a.appendReconnectEventLocked("сеть временно недоступна", 1, time.Date(2026, 7, 28, 12, 5, 0, 0, time.Local))
 	a.mu.Unlock()
 	a.saveReconnectHistory(items)
 

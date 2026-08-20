@@ -37,8 +37,6 @@ const (
 
 	vkEscape = 0x1B
 
-	htTransparent = -1
-
 	colorWindow = 5
 	nullBrush   = 5
 	transparent = 1
@@ -127,8 +125,6 @@ var (
 	procGetSystemMetrics           = user32.NewProc("GetSystemMetrics")
 	procSetWindowPos               = user32.NewProc("SetWindowPos")
 	procSetFocus                   = user32.NewProc("SetFocus")
-	procSetTimer                   = user32.NewProc("SetTimer")
-	procKillTimer                  = user32.NewProc("KillTimer")
 	procGetCursorPos               = user32.NewProc("GetCursorPos")
 	procDrawTextW                  = user32.NewProc("DrawTextW")
 	procSetWindowRgn               = user32.NewProc("SetWindowRgn")
@@ -145,7 +141,6 @@ var (
 	procTextOutW           = gdi32.NewProc("TextOutW")
 	procGetStockObject     = gdi32.NewProc("GetStockObject")
 	procCreateFontW        = gdi32.NewProc("CreateFontW")
-	procEllipse            = gdi32.NewProc("Ellipse")
 	procCreateRoundRectRgn = gdi32.NewProc("CreateRoundRectRgn")
 )
 
@@ -419,7 +414,7 @@ func placeOverlayInteractive(x, y int) (OverlayPosition, error) {
 
 func runOverlayWindow(x, y int, placing bool) error {
 	width, height := 214, 36
-	if x < 0 || y < 0 {
+	if x == -1 && y == -1 {
 		x, y = defaultOverlayPosition(width, height)
 	} else {
 		x, y = safeOverlayPosition(x, y, width, height)

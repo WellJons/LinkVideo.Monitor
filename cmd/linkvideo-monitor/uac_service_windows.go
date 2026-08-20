@@ -44,7 +44,6 @@ const (
 	createNoWindow           = 0x08000000
 	createUnicodeEnvironment = 0x00000400
 	stillActive              = 259
-	invalidSessionID         = 0xffffffff
 )
 
 type serviceTableEntryW struct {
@@ -123,35 +122,32 @@ type processEntry32W struct {
 }
 
 var (
-	advapi32Service                         = syscall.NewLazyDLL("advapi32.dll")
-	procStartServiceCtrlDispatcherW         = advapi32Service.NewProc("StartServiceCtrlDispatcherW")
-	procRegisterServiceCtrlHandlerExW       = advapi32Service.NewProc("RegisterServiceCtrlHandlerExW")
-	procSetServiceStatusW                   = advapi32Service.NewProc("SetServiceStatus")
-	procOpenProcessTokenService             = advapi32Service.NewProc("OpenProcessToken")
-	procDuplicateTokenExService             = advapi32Service.NewProc("DuplicateTokenEx")
-	procSetTokenInformationService          = advapi32Service.NewProc("SetTokenInformation")
-	procLookupPrivilegeValueWService        = advapi32Service.NewProc("LookupPrivilegeValueW")
-	procAdjustTokenPrivilegesService        = advapi32Service.NewProc("AdjustTokenPrivileges")
-	procCreateProcessAsUserWService         = advapi32Service.NewProc("CreateProcessAsUserW")
-	wtsapi32Service                         = syscall.NewLazyDLL("wtsapi32.dll")
-	procWTSQueryUserTokenService            = wtsapi32Service.NewProc("WTSQueryUserToken")
-	userenvService                          = syscall.NewLazyDLL("userenv.dll")
-	procCreateEnvironmentBlockService       = userenvService.NewProc("CreateEnvironmentBlock")
-	procDestroyEnvironmentBlockService      = userenvService.NewProc("DestroyEnvironmentBlock")
-	procGetCurrentProcessService            = kernel32Service.NewProc("GetCurrentProcess")
-	procWTSGetActiveConsoleSessionIDService = kernel32Service.NewProc("WTSGetActiveConsoleSessionId")
-	procGetExitCodeProcessService           = kernel32Service.NewProc("GetExitCodeProcess")
-	procTerminateProcessService             = kernel32Service.NewProc("TerminateProcess")
-	procCloseHandleService                  = kernel32Service.NewProc("CloseHandle")
-	procCreateToolhelp32SnapshotService     = kernel32Service.NewProc("CreateToolhelp32Snapshot")
-	procProcess32FirstWService              = kernel32Service.NewProc("Process32FirstW")
-	procProcess32NextWService               = kernel32Service.NewProc("Process32NextW")
-	kernel32Service                         = syscall.NewLazyDLL("kernel32.dll")
-	serviceStopCh                           = make(chan struct{})
-	serviceStopOnce                         sync.Once
-	serviceStatusHandle                     uintptr
-	serviceMainCallback                     = syscall.NewCallback(serviceMainEntry)
-	serviceHandlerCallback                  = syscall.NewCallback(serviceControlHandler)
+	advapi32Service                     = syscall.NewLazyDLL("advapi32.dll")
+	procStartServiceCtrlDispatcherW     = advapi32Service.NewProc("StartServiceCtrlDispatcherW")
+	procRegisterServiceCtrlHandlerExW   = advapi32Service.NewProc("RegisterServiceCtrlHandlerExW")
+	procSetServiceStatusW               = advapi32Service.NewProc("SetServiceStatus")
+	procOpenProcessTokenService         = advapi32Service.NewProc("OpenProcessToken")
+	procDuplicateTokenExService         = advapi32Service.NewProc("DuplicateTokenEx")
+	procSetTokenInformationService      = advapi32Service.NewProc("SetTokenInformation")
+	procLookupPrivilegeValueWService    = advapi32Service.NewProc("LookupPrivilegeValueW")
+	procAdjustTokenPrivilegesService    = advapi32Service.NewProc("AdjustTokenPrivileges")
+	procCreateProcessAsUserWService     = advapi32Service.NewProc("CreateProcessAsUserW")
+	userenvService                      = syscall.NewLazyDLL("userenv.dll")
+	procCreateEnvironmentBlockService   = userenvService.NewProc("CreateEnvironmentBlock")
+	procDestroyEnvironmentBlockService  = userenvService.NewProc("DestroyEnvironmentBlock")
+	procGetCurrentProcessService        = kernel32Service.NewProc("GetCurrentProcess")
+	procGetExitCodeProcessService       = kernel32Service.NewProc("GetExitCodeProcess")
+	procTerminateProcessService         = kernel32Service.NewProc("TerminateProcess")
+	procCloseHandleService              = kernel32Service.NewProc("CloseHandle")
+	procCreateToolhelp32SnapshotService = kernel32Service.NewProc("CreateToolhelp32Snapshot")
+	procProcess32FirstWService          = kernel32Service.NewProc("Process32FirstW")
+	procProcess32NextWService           = kernel32Service.NewProc("Process32NextW")
+	kernel32Service                     = syscall.NewLazyDLL("kernel32.dll")
+	serviceStopCh                       = make(chan struct{})
+	serviceStopOnce                     sync.Once
+	serviceStatusHandle                 uintptr
+	serviceMainCallback                 = syscall.NewCallback(serviceMainEntry)
+	serviceHandlerCallback              = syscall.NewCallback(serviceControlHandler)
 )
 
 type secureAgentProcess struct {
@@ -159,10 +155,6 @@ type secureAgentProcess struct {
 	pid       uint32
 	key       string
 	sessionID uint32
-}
-
-func isWindowsService() bool {
-	return len(os.Args) > 1 && os.Args[1] == "--uac-service"
 }
 
 func runUACService() error {
@@ -224,14 +216,12 @@ func serviceWorker(stop <-chan struct{}) error {
 		return err
 	}
 	agents := make(map[uint32]*secureAgentProcess)
-	var backgroundAgent *secureAgentProcess
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	defer func() {
 		for _, agent := range agents {
 			stopSecureAgent(agent)
 		}
-		stopSecureAgent(backgroundAgent)
 	}()
 
 	serviceLog("service started")
@@ -241,25 +231,6 @@ func serviceWorker(stop <-chan struct{}) error {
 			serviceLog("service stop requested")
 			return nil
 		case <-ticker.C:
-			activeSession := activeConsoleSessionID()
-			if backgroundAgent != nil {
-				if !processStillRunning(backgroundAgent.process) || (activeSession != invalidSessionID && backgroundAgent.sessionID != activeSession) {
-					stopSecureAgent(backgroundAgent)
-					backgroundAgent = nil
-				}
-			}
-			if backgroundAgent == nil && activeSession != invalidSessionID && !runningInstanceAvailable() {
-				appPath, pathErr := loadInstalledAppPath()
-				if pathErr != nil {
-					serviceLog("background agent path: " + pathErr.Error())
-				} else if agent, launchErr := launchBackgroundAgent(activeSession, appPath); launchErr != nil {
-					serviceLog(fmt.Sprintf("background agent session %d: %v", activeSession, launchErr))
-				} else {
-					backgroundAgent = agent
-					serviceLog(fmt.Sprintf("background agent started: session=%d pid=%d", activeSession, agent.pid))
-				}
-			}
-
 			requests := loadSecureCaptureRequests(sessionsDir)
 			for sessionID, agent := range agents {
 				req, ok := requests[sessionID]
@@ -334,13 +305,7 @@ func validSecureCaptureRequest(req secureCaptureRequest) bool {
 	if req.SessionID == 0xffffffff || req.ClientPID == 0 || !strings.EqualFold(req.MappingName, expectedMapping) {
 		return false
 	}
-	if req.Width < 2 || req.Height < 2 || req.OutputWidth < 2 || req.OutputHeight < 2 {
-		return false
-	}
-	if req.Width > 32768 || req.Height > 32768 || req.OutputWidth > 8192 || req.OutputHeight > 8192 {
-		return false
-	}
-	return req.FPS >= 1 && req.FPS <= 30
+	return validSecureCaptureDimensions(req.Width, req.Height, req.OutputWidth, req.OutputHeight, req.FPS)
 }
 
 func requestKey(req secureCaptureRequest) string {
@@ -351,32 +316,21 @@ func requestKey(req secureCaptureRequest) string {
 	}, "|")
 }
 
-func isLinkVideoMonitorProcessName(name string) bool {
-	name = strings.ToLower(strings.TrimSpace(name))
-	if name == "linkvideo.monitor.exe" {
-		return true
-	}
-	return strings.HasPrefix(name, "linkvideo.monitor_") && strings.HasSuffix(name, ".exe")
-}
-
 func launchSecureAgent(req secureCaptureRequest) (*secureAgentProcess, error) {
 	var clientSession uint32
-	ok, _, callErr := procProcessIdToSessionIdSecure.Call(uintptr(req.ClientPID), uintptr(unsafe.Pointer(&clientSession)))
+	ok, _, _ := procProcessIdToSessionIdSecure.Call(uintptr(req.ClientPID), uintptr(unsafe.Pointer(&clientSession)))
 	if ok == 0 || clientSession != req.SessionID {
 		return nil, fmt.Errorf("requesting process is not in session %d", req.SessionID)
 	}
-	if !isLinkVideoMonitorProcessName(processImageName(req.ClientPID)) {
-		return nil, errors.New("secure capture request was not created by LinkVideo Monitor")
-	}
-
 	// Launch the installed application rather than the service copy. FFmpeg is
 	// installed next to this executable and is used by the DXGI secure helper.
 	exe, err := loadInstalledAppPath()
 	if err != nil {
-		exe, err = os.Executable()
-		if err != nil {
-			return nil, err
-		}
+		return nil, fmt.Errorf("installed LinkVideo Monitor path is unavailable: %w", err)
+	}
+	requesterPath := processExecutablePath(req.ClientPID)
+	if !sameWindowsExecutablePath(requesterPath, exe) {
+		return nil, errors.New("secure capture request was not created by the installed LinkVideo Monitor")
 	}
 
 	primaryToken, err := duplicateWinlogonPrimaryToken(req.SessionID)
@@ -410,7 +364,7 @@ func launchSecureAgent(req secureCaptureRequest) (*secureAgentProcess, error) {
 	}
 
 	var pi processInformation
-	ok, _, callErr = procCreateProcessAsUserWService.Call(
+	ok, _, callErr := procCreateProcessAsUserWService.Call(
 		primaryToken,
 		uintptr(unsafe.Pointer(appPtr)),
 		uintptr(unsafe.Pointer(&cmdBuf[0])),
@@ -504,11 +458,6 @@ func findSessionWinlogonPID(sessionID uint32) (uint32, error) {
 	return 0, fmt.Errorf("winlogon.exe для сеанса %d не найден: %v", sessionID, callErr)
 }
 
-func activeConsoleSessionID() uint32 {
-	id, _, _ := procWTSGetActiveConsoleSessionIDService.Call()
-	return uint32(id)
-}
-
 func installedAppPathFile() string {
 	return filepath.Join(os.Getenv("PROGRAMDATA"), "LinkVideo.Monitor", "Service", "app-path.txt")
 }
@@ -530,60 +479,6 @@ func loadInstalledAppPath() (string, error) {
 		return "", errors.New("installed application path is a directory")
 	}
 	return appPath, nil
-}
-
-func launchBackgroundAgent(sessionID uint32, appPath string) (*secureAgentProcess, error) {
-	if sessionID == invalidSessionID {
-		return nil, errors.New("interactive Windows session is unavailable")
-	}
-	var userToken uintptr
-	ok, _, callErr := procWTSQueryUserTokenService.Call(uintptr(sessionID), uintptr(unsafe.Pointer(&userToken)))
-	if ok == 0 || userToken == 0 {
-		return nil, fmt.Errorf("WTSQueryUserToken: %v", callErr)
-	}
-	defer procCloseHandleService.Call(userToken)
-
-	var primaryToken uintptr
-	ok, _, callErr = procDuplicateTokenExService.Call(
-		userToken, tokenAllForLaunch, 0, securityImpersonation, tokenPrimary, uintptr(unsafe.Pointer(&primaryToken)),
-	)
-	if ok == 0 || primaryToken == 0 {
-		return nil, fmt.Errorf("DuplicateTokenEx(user): %v", callErr)
-	}
-	defer procCloseHandleService.Call(primaryToken)
-
-	var environment uintptr
-	ok, _, callErr = procCreateEnvironmentBlockService.Call(uintptr(unsafe.Pointer(&environment)), primaryToken, 0)
-	if ok == 0 {
-		return nil, fmt.Errorf("CreateEnvironmentBlock: %v", callErr)
-	}
-	defer procDestroyEnvironmentBlockService.Call(environment)
-
-	commandLine := quoteWindowsCommand([]string{appPath, "--background"})
-	cmdBuf, _ := syscall.UTF16FromString(commandLine)
-	appPtr, _ := syscall.UTF16PtrFromString(appPath)
-	desktopPtr, _ := syscall.UTF16PtrFromString(`winsta0\default`)
-	dirPtr, _ := syscall.UTF16PtrFromString(filepath.Dir(appPath))
-	si := startupInfoW{CB: uint32(unsafe.Sizeof(startupInfoW{})), Desktop: desktopPtr}
-	var pi processInformation
-	ok, _, callErr = procCreateProcessAsUserWService.Call(
-		primaryToken,
-		uintptr(unsafe.Pointer(appPtr)),
-		uintptr(unsafe.Pointer(&cmdBuf[0])),
-		0, 0, 0,
-		createUnicodeEnvironment,
-		environment,
-		uintptr(unsafe.Pointer(dirPtr)),
-		uintptr(unsafe.Pointer(&si)),
-		uintptr(unsafe.Pointer(&pi)),
-	)
-	if ok == 0 {
-		return nil, fmt.Errorf("CreateProcessAsUser(background): %v", callErr)
-	}
-	if pi.Thread != 0 {
-		procCloseHandleService.Call(pi.Thread)
-	}
-	return &secureAgentProcess{process: pi.Process, pid: pi.ProcessID, key: "background", sessionID: sessionID}, nil
 }
 
 func quoteWindowsCommand(args []string) string {

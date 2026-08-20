@@ -17,6 +17,7 @@ import (
 const (
 	microphoneSampleRate = 48000
 	microphoneChannels   = 2
+	microphoneFrameBytes = microphoneChannels * 2 // stereo s16le
 )
 
 type microphoneBridge struct {
@@ -117,26 +118,37 @@ func (b *microphoneBridge) captureOnce(ctx context.Context, conn net.Conn) error
 	}()
 
 	buf := make([]byte, microphoneSampleRate*microphoneChannels*2/50) // ~20 ms
+	pending := make([]byte, 0, len(buf)+microphoneFrameBytes-1)
 	for ctx.Err() == nil {
 		n, readErr := stdout.Read(buf)
 		if n > 0 {
-			chunk := buf[:n-n%2]
-			levelDB, levelPct := pcmLevel(chunk)
-			pass := b.shouldPass(levelDB)
-			if !pass {
-				for i := range chunk {
-					chunk[i] = 0
+			// Pipe reads are allowed to split a 16-bit sample or a stereo frame at
+			// any byte boundary. Keep the remainder for the next read instead of
+			// dropping one to three bytes and permanently desynchronising s16le.
+			pending = append(pending, buf[:n]...)
+			aligned := len(pending) - len(pending)%microphoneFrameBytes
+			if aligned > 0 {
+				chunk := pending[:aligned]
+				levelDB, levelPct := pcmLevel(chunk)
+				pass := b.shouldPass(levelDB)
+				if !pass {
+					for i := range chunk {
+						chunk[i] = 0
+					}
 				}
-			}
-			b.app.mu.Lock()
-			mode := b.app.cfg.MicrophoneMode
-			b.app.mu.Unlock()
-			active := pass && (mode == "push_to_talk" || levelDB > -55)
-			b.app.updateMicrophoneRuntime(active, levelPct)
-			if err := writeFull(conn, chunk); err != nil {
-				_ = cmd.Process.Kill()
-				_ = cmd.Wait()
-				return err
+				b.app.mu.Lock()
+				mode := b.app.cfg.MicrophoneMode
+				b.app.mu.Unlock()
+				active := pass && (mode == "push_to_talk" || levelDB > -55)
+				b.app.updateMicrophoneRuntime(active, levelPct)
+				if err := writeFull(conn, chunk); err != nil {
+					_ = cmd.Process.Kill()
+					_ = cmd.Wait()
+					return err
+				}
+				left := len(pending) - aligned
+				copy(pending[:left], pending[aligned:])
+				pending = pending[:left]
 			}
 		}
 		if readErr != nil {

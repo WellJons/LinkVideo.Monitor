@@ -1,0 +1,113 @@
+name: Full Audit
+
+on:
+  push:
+    branches:
+      - audit/full-code-review
+      - final/0.8.12
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-build-test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: actions/setup-go@v5
+        with:
+          # Go 1.20 is intentionally retained for Windows 7 compatibility.
+          go-version: '1.20.x'
+          cache: true
+      - name: Application unit tests
+        run: go test -count=1 ./cmd/linkvideo-monitor
+      - name: Application race tests
+        run: go test -race -count=1 ./cmd/linkvideo-monitor
+      - name: Application vet
+        run: go vet -unsafeptr=false ./cmd/linkvideo-monitor
+      - name: Create compile-only installer payload
+        shell: pwsh
+        run: python -c "import zipfile; zipfile.ZipFile(r'installer/payload.zip','w').close()"
+      - name: Installer unit tests
+        working-directory: installer
+        run: go test -count=1 ./...
+      - name: Installer vet
+        working-directory: installer
+        run: go vet -unsafeptr=false ./...
+      - name: Remove compile-only payload
+        shell: pwsh
+        run: Remove-Item -Force -ErrorAction SilentlyContinue installer/payload.zip
+      - name: Build application
+        shell: cmd
+        run: scripts\windows\build-app.cmd
+      - name: Build installer and uninstaller
+        shell: cmd
+        run: scripts\windows\build-installer.cmd
+      - name: Upload test binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: LinkVideo-Monitor-0.8.12-test
+          if-no-files-found: error
+          path: |
+            build/LinkVideo.Monitor.exe
+            build/LinkVideo.Monitor_0.8.12_Setup.exe
+            build/Uninstall.exe
+
+  static-analysis:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.13'
+          cache: false
+      - name: Check gofmt
+        shell: bash
+        run: |
+          files="$(git ls-files '*.go')"
+          bad="$(gofmt -l $files)"
+          if [ -n "$bad" ]; then
+            echo "Files requiring gofmt:"
+            echo "$bad"
+            exit 1
+          fi
+      - name: Install analyzers
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: Staticcheck application for Windows
+        env:
+          GOOS: windows
+          GOARCH: amd64
+        run: staticcheck ./cmd/linkvideo-monitor
+      - name: Govulncheck application for Windows
+        env:
+          GOOS: windows
+          GOARCH: amd64
+        run: govulncheck ./cmd/linkvideo-monitor
+      - name: Create compile-only installer payload
+        run: python3 -c "import zipfile; zipfile.ZipFile('installer/payload.zip','w').close()"
+      - name: Staticcheck installer for Windows
+        working-directory: installer
+        env:
+          GOOS: windows
+          GOARCH: amd64
+        run: staticcheck ./...
+      - name: Govulncheck installer for Windows
+        working-directory: installer
+        env:
+          GOOS: windows
+          GOARCH: amd64
+        run: govulncheck ./...
+      - name: Remove compile-only payload
+        run: rm -f installer/payload.zip
+      - name: Python syntax check
+        run: python3 -m py_compile tools/*.py
