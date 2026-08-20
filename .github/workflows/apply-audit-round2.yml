@@ -1,0 +1,39 @@
+name: Apply Audit Round 2
+
+on:
+  push:
+    branches:
+      - audit/full-code-review
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, '[audit-round2-applied]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: audit/full-code-review
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.13'
+          cache: false
+      - name: Apply reviewed fixes
+        run: python3 tools/apply_audit_round2.py
+      - name: Format
+        run: gofmt -w $(git ls-files '*.go')
+      - name: Remove one-shot machinery
+        run: |
+          rm tools/apply_audit_round2.py
+          rm .github/workflows/apply-audit-round2.yml
+          rm -f .audit-round2-trigger
+      - name: Commit
+        run: |
+          git config user.name "LinkVideo Audit Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add -A
+          git commit -m "Fix remote sync, overlay coordinates and ZIP containment [audit-round2-applied]"
+          git push origin HEAD:audit/full-code-review
