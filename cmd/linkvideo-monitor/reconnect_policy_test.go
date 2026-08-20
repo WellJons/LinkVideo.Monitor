@@ -44,3 +44,30 @@ func TestReconnectTelemetryContainsRuntimeMetrics(t *testing.T) {
 		}
 	}
 }
+
+func TestFFmpegTransportFailureReasonDoesNotInventServerCause(t *testing.T) {
+	got := ffmpegTransportFailureReason("error submitting a packet to the muxer: broken pipe")
+	lower := strings.ToLower(got)
+	if got == "" || !strings.Contains(lower, "broken pipe") {
+		t.Fatalf("expected concrete EPIPE reason, got %q", got)
+	}
+	if strings.Contains(lower, "сервер закрыл") || strings.Contains(lower, "server closed") {
+		t.Fatalf("reason must not claim an unproven server-side close: %q", got)
+	}
+	if !isTransportFailureReason(got) {
+		t.Fatalf("reason must be classified as transport failure: %q", got)
+	}
+}
+
+func TestFFmpegTransportFailureReasonClassifiesCommonNetworkErrors(t *testing.T) {
+	for _, line := range []string{
+		"connection reset by peer",
+		"connection timed out",
+		"connection refused",
+		"failed reading rtsp data",
+	} {
+		if got := ffmpegTransportFailureReason(line); got == "" {
+			t.Fatalf("expected classification for %q", line)
+		}
+	}
+}
