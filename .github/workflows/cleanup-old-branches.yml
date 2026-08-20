@@ -1,0 +1,55 @@
+name: Cleanup old branches
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/cleanup-old-branches.yml
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Delete obsolete branches
+        shell: bash
+        run: |
+          set -euo pipefail
+          branches=(
+            "audit/full-code-review"
+            "feature/adaptive-low-end-optimization"
+            "feature/adaptive-low-end-optimization-copy"
+            "feature/encoder-fallback-cpu-optimization"
+            "feature/h265-probe-github-updates"
+            "feature/robust-auto-updates"
+            "feature/safe-stream-resilience"
+            "final/0.8.12"
+            "tmp-do-not-use"
+          )
+          for branch in "${branches[@]}"; do
+            if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+              echo "Deleting $branch"
+              git push origin --delete "$branch"
+            else
+              echo "Already absent: $branch"
+            fi
+          done
+
+      - name: Remove temporary cleanup workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "LinkVideo Repository Cleanup"
+          git config user.email "actions@users.noreply.github.com"
+          git rm .github/workflows/cleanup-old-branches.yml
+          git commit -m "Remove temporary branch cleanup workflow"
+          git push origin HEAD:main
