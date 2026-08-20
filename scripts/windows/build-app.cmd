@@ -35,5 +35,4 @@ if not errorlevel 1 (
 
 echo Built: %BUILD%\LinkVideo.Monitor.exe
 if not defined LINKVIDEO_REMOTE_API_URL echo WARNING: Remote API URL is not embedded; remote control will remain disabled.
-if not defined LINKVIDEO_UPDATE_MANIFEST_URL echo WARNING: Update manifest URL is not embedded; update checks will remain disabled.
 endlocal
