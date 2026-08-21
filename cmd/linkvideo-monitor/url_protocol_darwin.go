@@ -3,7 +3,7 @@
 package main
 
 /*
-#cgo LDFLAGS: -framework Foundation -framework CoreServices
+#cgo LDFLAGS: -framework Foundation -framework AppKit -framework CoreServices
 #include <stdlib.h>
 
 char *lv_register_url_handler(void);
