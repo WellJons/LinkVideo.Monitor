@@ -35,7 +35,10 @@ verify_archive() {
   fi
   local actual
   actual="$(shasum -a 256 "$archive" | awk '{print $1}')"
-  if [[ "${actual,,}" != "${expected,,}" ]]; then
+  local actual_lower expected_lower
+  actual_lower="$(printf '%s' "$actual" | tr '[:upper:]' '[:lower:]')"
+  expected_lower="$(printf '%s' "$expected" | tr '[:upper:]' '[:lower:]')"
+  if [[ "$actual_lower" != "$expected_lower" ]]; then
     echo "MediaMTX checksum mismatch for $name" >&2
     echo "expected: $expected" >&2
     echo "actual:   $actual" >&2
