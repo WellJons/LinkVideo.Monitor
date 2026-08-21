@@ -3,6 +3,7 @@ import ScreenCaptureKit
 import CoreGraphics
 import CoreMedia
 import CoreVideo
+import AVFoundation
 
 struct DisplayInfo: Codable {
     let id: UInt32
@@ -115,20 +116,96 @@ final class FrameOutput: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 }
 
+final class AudioOutput: NSObject, SCStreamOutput, SCStreamDelegate {
+    private let output = FileHandle.standardOutput
+
+    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of outputType: SCStreamOutputType) {
+        guard outputType == .audio, sampleBuffer.isValid else { return }
+        do {
+            try sampleBuffer.withAudioBufferList { audioBufferList, _ in
+                guard let description = sampleBuffer.formatDescription?.audioStreamBasicDescription,
+                      let format = AVAudioFormat(
+                        standardFormatWithSampleRate: description.mSampleRate,
+                        channels: description.mChannelsPerFrame
+                      ),
+                      let samples = AVAudioPCMBuffer(
+                        pcmFormat: format,
+                        bufferListNoCopy: audioBufferList.unsafePointer
+                      ) else { return }
+                writeStereoS16LE(samples)
+            }
+        } catch {
+            fputs("ScreenCaptureKit audio sample: \(error.localizedDescription)\n", stderr)
+            fflush(stderr)
+        }
+    }
+
+    private func writeStereoS16LE(_ samples: AVAudioPCMBuffer) {
+        guard let channels = samples.floatChannelData else { return }
+        let frameCount = Int(samples.frameLength)
+        let channelCount = Int(samples.format.channelCount)
+        guard frameCount > 0, channelCount > 0 else { return }
+
+        var pcm = [Int16](repeating: 0, count: frameCount * 2)
+        for frame in 0..<frameCount {
+            let left = channels[0][frame]
+            let right = channelCount > 1 ? channels[1][frame] : left
+            pcm[frame * 2] = pcm16(left)
+            pcm[frame * 2 + 1] = pcm16(right)
+        }
+        pcm.withUnsafeBytes { bytes in
+            output.write(Data(bytes))
+        }
+    }
+
+    private func pcm16(_ value: Float) -> Int16 {
+        let clamped = max(-1.0, min(1.0, value))
+        if clamped <= -1.0 { return Int16.min }
+        if clamped >= 1.0 { return Int16.max }
+        return Int16(clamped * Float(Int16.max))
+    }
+
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        fputs("ScreenCaptureKit audio stopped: \(error.localizedDescription)\n", stderr)
+        fflush(stderr)
+        exit(3)
+    }
+}
+
 func value(after key: String, in args: [String]) -> String? {
     guard let index = args.firstIndex(of: key), index + 1 < args.count else { return nil }
     return args[index + 1]
 }
 
-func capture(args: [String]) throws {
-    let content = try shareableContent()
+func selectedDisplay(_ content: SCShareableContent, requestedID: UInt32 = 0) throws -> SCDisplay {
     guard !content.displays.isEmpty else { throw HelperError.noDisplays }
-
-    let requestedID = UInt32(value(after: "--display-id", in: args) ?? "0") ?? 0
     let mainID = CGMainDisplayID()
     let display = content.displays.first(where: { $0.displayID == (requestedID == 0 ? mainID : requestedID) })
         ?? (requestedID == 0 ? content.displays.first : nil)
     guard let display else { throw HelperError.displayNotFound(requestedID) }
+    return display
+}
+
+func startStream(_ stream: SCStream, output: AnyObject) throws {
+    let started = DispatchSemaphore(value: 0)
+    var startError: Error?
+    stream.startCapture { error in
+        startError = error
+        started.signal()
+    }
+    started.wait()
+    if let error = startError {
+        throw HelperError.stream(error.localizedDescription)
+    }
+    withExtendedLifetime((stream, output)) {
+        RunLoop.main.run()
+    }
+}
+
+func capture(args: [String]) throws {
+    let content = try shareableContent()
+    let requestedID = UInt32(value(after: "--display-id", in: args) ?? "0") ?? 0
+    let display = try selectedDisplay(content, requestedID: requestedID)
 
     let nativeWidth = Int(CGDisplayPixelsWide(display.displayID))
     let nativeHeight = Int(CGDisplayPixelsHigh(display.displayID))
@@ -154,21 +231,29 @@ func capture(args: [String]) throws {
     } catch {
         throw HelperError.stream(error.localizedDescription)
     }
+    try startStream(stream, output: output)
+}
 
-    let started = DispatchSemaphore(value: 0)
-    var startError: Error?
-    stream.startCapture { error in
-        startError = error
-        started.signal()
-    }
-    started.wait()
-    if let error = startError {
+func captureAudio() throws {
+    let content = try shareableContent()
+    let display = try selectedDisplay(content)
+    let filter = SCContentFilter(display: display, excludingWindows: [])
+    let configuration = SCStreamConfiguration()
+    configuration.capturesAudio = true
+    configuration.sampleRate = 48_000
+    configuration.channelCount = 2
+    configuration.excludesCurrentProcessAudio = true
+    configuration.queueDepth = 3
+
+    let output = AudioOutput()
+    let queue = DispatchQueue(label: "ru.linkvideo.monitor.systemaudio", qos: .userInitiated)
+    let stream = SCStream(filter: filter, configuration: configuration, delegate: output)
+    do {
+        try stream.addStreamOutput(output, type: .audio, sampleHandlerQueue: queue)
+    } catch {
         throw HelperError.stream(error.localizedDescription)
     }
-
-    withExtendedLifetime((stream, output)) {
-        RunLoop.main.run()
-    }
+    try startStream(stream, output: output)
 }
 
 func main() throws {
@@ -189,11 +274,15 @@ func main() throws {
         FileHandle.standardOutput.write(data)
         return
     }
+    if args.contains("--capture-audio") {
+        try captureAudio()
+        return
+    }
     if args.contains("--capture") {
         try capture(args: args)
         return
     }
-    fputs("Usage: linkvideo-capture-helper --check-permission | --request-permission | --list-displays | --capture ...\n", stderr)
+    fputs("Usage: linkvideo-capture-helper --check-permission | --request-permission | --list-displays | --capture | --capture-audio\n", stderr)
     exit(2)
 }
 
