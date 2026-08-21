@@ -49,20 +49,26 @@ jobs:
           set -euo pipefail
           APP='build/macos/LinkVideo.Monitor.app'
           test -x "$APP/Contents/MacOS/LinkVideo.Monitor"
+          test -x "$APP/Contents/MacOS/ffmpeg.exe"
           test -x "$APP/Contents/Resources/linkvideo-capture-helper"
           plutil -lint "$APP/Contents/Info.plist"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP/Contents/Info.plist")" = '13.0'
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" = '0.1.0'
           lipo -archs "$APP/Contents/MacOS/LinkVideo.Monitor" | grep -q arm64
           lipo -archs "$APP/Contents/MacOS/LinkVideo.Monitor" | grep -q x86_64
           lipo -archs "$APP/Contents/Resources/linkvideo-capture-helper" | grep -q arm64
           lipo -archs "$APP/Contents/Resources/linkvideo-capture-helper" | grep -q x86_64
           codesign --verify --deep --strict "$APP"
-      - name: Package app artifact
+      - name: Package ZIP and DMG artifacts
         run: |
           ditto -c -k --sequesterRsrc --keepParent \
             build/macos/LinkVideo.Monitor.app \
             build/macos/LinkVideo.Monitor_macOS_0.1.0-dev.zip
+          bash scripts/macos/package-dmg.sh
       - uses: actions/upload-artifact@v4
         with:
           name: LinkVideo-Monitor-macOS-0.1.0-dev
-          path: build/macos/LinkVideo.Monitor_macOS_0.1.0-dev.zip
+          path: |
+            build/macos/LinkVideo.Monitor_macOS_0.1.0-dev.zip
+            build/macos/LinkVideo.Monitor_macOS_0.1.0-dev.dmg
           if-no-files-found: error
