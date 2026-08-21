@@ -45,30 +45,44 @@ jobs:
       - name: Check macOS packaging scripts
         run: |
           bash -n scripts/macos/build-app.sh
+          bash -n scripts/macos/build-bundled-app.sh
+          bash -n scripts/macos/fetch-ffmpeg.sh
           bash -n scripts/macos/fetch-mediamtx.sh
           bash -n scripts/macos/package-pkg.sh
           bash -n scripts/macos/package-dmg.sh
           bash -n 'packaging/macos/Uninstall LinkVideo Monitor.command'
           bash -n packaging/macos/pkg-scripts/preinstall
-      - name: Build Universal macOS app
+      - name: Build Universal macOS app with bundled runtime
         env:
           GH_TOKEN: ${{ github.token }}
-        run: scripts/macos/build-app.sh
+        run: bash scripts/macos/build-bundled-app.sh
       - name: Verify app bundle
         run: |
           set -euo pipefail
           APP='build/macos/LinkVideo.Monitor.app'
+          FFMPEG="$APP/Contents/MacOS/ffmpeg.exe"
+          MEDIAMTX="$APP/Contents/MacOS/mediamtx"
           test -x "$APP/Contents/MacOS/LinkVideo.Monitor"
-          test -x "$APP/Contents/MacOS/ffmpeg.exe"
-          test -x "$APP/Contents/MacOS/mediamtx"
+          test -x "$FFMPEG"
+          test -x "$MEDIAMTX"
           test -x "$APP/Contents/Resources/linkvideo-capture-helper"
           test -x "$APP/Contents/Resources/linkvideo-workspace-helper"
           test -x "$APP/Contents/Resources/linkvideo-overlay-helper"
           test -x "$APP/Contents/Resources/linkvideo-hotkey-helper"
-          file "$APP/Contents/MacOS/mediamtx" | grep -q 'Mach-O'
-          lipo -archs "$APP/Contents/MacOS/mediamtx" | grep -q arm64
-          lipo -archs "$APP/Contents/MacOS/mediamtx" | grep -q x86_64
-          "$APP/Contents/MacOS/mediamtx" --version 2>&1 | grep -q '1.20.0'
+          file "$FFMPEG" | grep -q 'Mach-O'
+          lipo -archs "$FFMPEG" | grep -q arm64
+          lipo -archs "$FFMPEG" | grep -q x86_64
+          "$FFMPEG" -version 2>&1 | head -n 1 | grep -q 'ffmpeg version 8.1.2'
+          "$FFMPEG" -hide_banner -encoders 2>/dev/null | grep -Eq '[[:space:]]h264_videotoolbox[[:space:]]'
+          "$FFMPEG" -hide_banner -encoders 2>/dev/null | grep -Eq '[[:space:]]hevc_videotoolbox[[:space:]]'
+          "$FFMPEG" -hide_banner -encoders 2>/dev/null | grep -Eq '[[:space:]]libx264[[:space:]]'
+          "$FFMPEG" -hide_banner -encoders 2>/dev/null | grep -Eq '[[:space:]]libx265[[:space:]]'
+          "$FFMPEG" -hide_banner -encoders 2>/dev/null | grep -Eq '[[:space:]]aac[[:space:]]'
+          codesign --verify --strict "$FFMPEG"
+          file "$MEDIAMTX" | grep -q 'Mach-O'
+          lipo -archs "$MEDIAMTX" | grep -q arm64
+          lipo -archs "$MEDIAMTX" | grep -q x86_64
+          "$MEDIAMTX" --version 2>&1 | grep -q '1.20.0'
           plutil -lint "$APP/Contents/Info.plist"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP/Contents/Info.plist")" = '13.0'
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" = '0.1.0'
