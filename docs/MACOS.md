@@ -18,7 +18,7 @@ Windows продолжает использовать `*_windows.go`, DXGI/GDI, 
 - список микрофонов и захват выбранного микрофона через AVFoundation -> stereo 48 kHz S16LE;
 - общий microphone bridge сохраняет mute, level meter, voice activation и push-to-talk логику;
 - предотвращение idle sleep и, при необходимости, гашения дисплея через системный `/usr/bin/caffeinate`;
-- автозапуск в фоне через ServiceManagement `SMAppService` и bundled LaunchAgent;
+- автозапуск в фоне через ServiceManagement `SMAppService` и bundled Login Item application;
 - общий FFmpeg/RTSP/RTMP pipeline;
 - аппаратный H.264/H.265 через Apple VideoToolbox (`h264_videotoolbox` / `hevc_videotoolbox`);
 - общий realtime-probe и автоматический fallback с VideoToolbox на программный x264/x265, если аппаратный encoder недоступен;
@@ -51,9 +51,11 @@ Windows по-прежнему использует существующий FFmp
 
 На macOS историческое поле конфигурации `launch_with_windows` сохраняется ради совместимости с существующим API и настройками, но фактически управляет запуском программы при входе пользователя в систему.
 
-В `.app` находится `Contents/Library/LaunchAgents/ru.linkvideo.monitor.autostart.plist`. Он зарегистрирован современным API macOS 13+ `SMAppService.agent(plistName:)`; `BundleProgram` указывает на основной `Contents/MacOS/LinkVideo.Monitor`, а `ProgramArguments` передаёт `--background`. Поэтому автозапуск не открывает страницу настроек в браузере.
+В основном bundle находится фоновое login-item приложение `Contents/Library/LoginItems/LinkVideoServiceHelper.app`. Оно является `LSUIElement`, не показывает собственное окно и управляет своей регистрацией через `SMAppService.mainApp`, доступный в macOS 13+.
 
-ServiceManagement сам отображает этот фоновый компонент в системных Login Items. Если macOS требует пользовательского разрешения, статус будет `requires-approval`; настройку можно разрешить в System Settings. Ручное копирование plist в `~/Library/LaunchAgents` не используется.
+При входе пользователя login item запускает основной `Contents/MacOS/LinkVideo.Monitor` с аргументом `--background` и завершается. Поэтому автозапуск не открывает страницу настроек в браузере и не создаёт вторую постоянно работающую копию Monitor.
+
+ServiceManagement отображает этот компонент в системных Login Items / Allow in Background. Если macOS требует пользовательского разрешения, статус будет `requires-approval`; настройку можно разрешить в System Settings. Legacy LaunchAgent и ручное копирование plist в `~/Library/LaunchAgents` не используются.
 
 ## FFmpeg в development-сборке
 
