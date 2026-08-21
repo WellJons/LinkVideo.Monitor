@@ -78,15 +78,10 @@ func (b *microphoneBridge) captureOnce(ctx context.Context, conn net.Conn) error
 	if device == "" {
 		return fmt.Errorf("устройство ввода не выбрано")
 	}
-	args := []string{
-		"-hide_banner", "-loglevel", "warning",
-		"-f", "dshow", "-audio_buffer_size", "50",
-		"-i", "audio=" + device,
-		"-ac", fmt.Sprint(microphoneChannels), "-ar", fmt.Sprint(microphoneSampleRate),
-		"-f", "s16le", "pipe:1",
+	cmd, err := microphoneCaptureCommand(ctx, b.cfg, device)
+	if err != nil {
+		return err
 	}
-	cmd := exec.CommandContext(ctx, resolveExecutable(b.cfg.FFmpegPath), args...)
-	hideChildWindow(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
