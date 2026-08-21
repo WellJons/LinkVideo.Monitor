@@ -41,8 +41,8 @@ func macOSServiceHelperPath() (string, error) {
 	if exe, err := os.Executable(); err == nil && exe != "" {
 		base := filepath.Dir(exe)
 		candidates := []string{
+			filepath.Clean(filepath.Join(base, "..", "Resources", "LinkVideoServiceHelper.app", "Contents", "MacOS", "LinkVideoServiceHelper")),
 			filepath.Join(base, "linkvideo-service-helper"),
-			filepath.Clean(filepath.Join(base, "..", "Resources", "linkvideo-service-helper")),
 		}
 		for _, candidate := range candidates {
 			if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
@@ -50,7 +50,7 @@ func macOSServiceHelperPath() (string, error) {
 			}
 		}
 	}
-	if path, err := exec.LookPath("linkvideo-service-helper"); err == nil {
+	if path, err := exec.LookPath("LinkVideoServiceHelper"); err == nil {
 		return path, nil
 	}
 	return "", errors.New("не найден macOS ServiceManagement helper")
