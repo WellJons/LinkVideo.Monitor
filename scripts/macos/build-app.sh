@@ -6,6 +6,7 @@ BUILD="$ROOT/build/macos"
 APP="$BUILD/LinkVideo.Monitor.app"
 SERVICE_APP="$APP/Contents/Library/LoginItems/LinkVideoServiceHelper.app"
 SERVICE_HELPER="$SERVICE_APP/Contents/MacOS/LinkVideoServiceHelper"
+SERVICE_BUNDLE_ID="ru.linkvideo.monitor.service-helper"
 VERSION="${MACOS_VERSION:-0.1.0-dev}"
 BUNDLE_VERSION="${VERSION%%[-+]*}"
 BUILD_NUMBER="${MACOS_BUILD_NUMBER:-1}"
@@ -73,6 +74,12 @@ cp "$ROOT/packaging/macos/ServiceHelper-Info.plist" "$SERVICE_APP/Contents/Info.
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 plutil -lint "$SERVICE_APP/Contents/Info.plist" >/dev/null
 
+actual_service_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$SERVICE_APP/Contents/Info.plist")"
+if [[ "$actual_service_id" != "$SERVICE_BUNDLE_ID" ]]; then
+  echo "Login item bundle id mismatch: $actual_service_id" >&2
+  exit 1
+fi
+
 if [[ -n "${FFMPEG_BINARY:-}" ]]; then
   cp "$FFMPEG_BINARY" "$FFMPEG_TARGET"
 else
@@ -113,20 +120,39 @@ if file "$FFMPEG_TARGET" | grep -q 'Mach-O'; then
   codesign --force --sign - "$FFMPEG_TARGET"
 fi
 codesign --force --deep --sign - "$APP"
+codesign --verify --deep --strict "$SERVICE_APP"
+codesign --verify --deep --strict "$APP"
 
-# Probe ServiceManagement from the actual main application process. This is
-# important: loginItemServiceWithIdentifier resolves helpers relative to the
-# calling app's Contents/Library/LoginItems directory.
+app_archs="$(lipo -archs "$APP/Contents/MacOS/LinkVideo.Monitor")"
+capture_archs="$(lipo -archs "$APP/Contents/Resources/linkvideo-capture-helper")"
+service_archs="$(lipo -archs "$SERVICE_HELPER")"
+for required in arm64 x86_64; do
+  [[ " $app_archs " == *" $required "* ]] || { echo "Main app misses $required" >&2; exit 1; }
+  [[ " $capture_archs " == *" $required "* ]] || { echo "Capture helper misses $required" >&2; exit 1; }
+  [[ " $service_archs " == *" $required "* ]] || { echo "Login item misses $required" >&2; exit 1; }
+done
+
+# Probe the ServiceManagement bridge from the actual main executable. Ad-hoc
+# CI builds can legitimately report not-found because they are not installed
+# and signed with the production Developer ID. Production/release jobs can set
+# MACOS_REQUIRE_SERVICE_STATUS=1 to make that state fatal.
 startup_status="$("$APP/Contents/MacOS/LinkVideo.Monitor" --startup-status)"
-if [[ "$startup_status" == "not-found" || "$startup_status" == "unknown" ]]; then
-  echo "ServiceManagement cannot resolve login item app from LinkVideo Monitor: $startup_status" >&2
+if [[ "$startup_status" == "unknown" ]]; then
+  echo "Unknown ServiceManagement login item status" >&2
   exit 1
+fi
+if [[ "$startup_status" == "not-found" ]]; then
+  if [[ "${MACOS_REQUIRE_SERVICE_STATUS:-0}" == "1" ]]; then
+    echo "ServiceManagement cannot resolve production login item" >&2
+    exit 1
+  fi
+  echo "Ad-hoc development build: ServiceManagement status is not-found; production signing will re-check registration"
 fi
 
 echo "Built: $APP"
 echo "Release version: $VERSION"
 echo "Bundle version: $BUNDLE_VERSION ($BUILD_NUMBER)"
-echo "App architectures: $(lipo -archs "$APP/Contents/MacOS/LinkVideo.Monitor")"
-echo "Capture helper architectures: $(lipo -archs "$APP/Contents/Resources/linkvideo-capture-helper")"
-echo "Login item architectures: $(lipo -archs "$SERVICE_HELPER")"
+echo "App architectures: $app_archs"
+echo "Capture helper architectures: $capture_archs"
+echo "Login item architectures: $service_archs"
 echo "Autostart login item status: $startup_status"
