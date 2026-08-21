@@ -4,9 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BUILD="$ROOT/build/macos"
 APP="$BUILD/LinkVideo.Monitor.app"
-SERVICE_APP="$APP/Contents/Resources/LinkVideoServiceHelper.app"
+SERVICE_APP="$APP/Contents/Library/LoginItems/LinkVideoServiceHelper.app"
 SERVICE_HELPER="$SERVICE_APP/Contents/MacOS/LinkVideoServiceHelper"
-AGENT_PLIST="$SERVICE_APP/Contents/Library/LaunchAgents/ru.linkvideo.monitor.autostart.plist"
 VERSION="${MACOS_VERSION:-0.1.0-dev}"
 BUNDLE_VERSION="${VERSION%%[-+]*}"
 BUILD_NUMBER="${MACOS_BUILD_NUMBER:-1}"
@@ -17,8 +16,7 @@ mkdir -p \
   "$BUILD" \
   "$APP/Contents/MacOS" \
   "$APP/Contents/Resources" \
-  "$SERVICE_APP/Contents/MacOS" \
-  "$SERVICE_APP/Contents/Library/LaunchAgents"
+  "$SERVICE_APP/Contents/MacOS"
 
 for arch in arm64 x86_64; do
   goarch="$arch"
@@ -44,7 +42,7 @@ for arch in arm64 x86_64; do
     -framework AudioToolbox \
     -o "$BUILD/linkvideo-capture-helper-$arch"
 
-  echo "==> ServiceManagement helper app $arch"
+  echo "==> ServiceManagement login item $arch"
   xcrun swiftc -O -whole-module-optimization \
     -target "$arch-apple-macos13.0" \
     "$ROOT/native/macos/servicemanagement/main.swift" \
@@ -69,14 +67,12 @@ lipo -create \
 
 cp "$ROOT/packaging/macos/Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/packaging/macos/ServiceHelper-Info.plist" "$SERVICE_APP/Contents/Info.plist"
-cp "$ROOT/packaging/macos/ru.linkvideo.monitor.autostart.plist" "$AGENT_PLIST"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $BUNDLE_VERSION" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $BUNDLE_VERSION" "$SERVICE_APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$SERVICE_APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 plutil -lint "$SERVICE_APP/Contents/Info.plist" >/dev/null
-plutil -lint "$AGENT_PLIST" >/dev/null
 
 if [[ -n "${FFMPEG_BINARY:-}" ]]; then
   cp "$FFMPEG_BINARY" "$FFMPEG_TARGET"
@@ -121,7 +117,7 @@ codesign --force --deep --sign - "$APP"
 
 startup_status="$($SERVICE_HELPER --startup-status)"
 if [[ "$startup_status" == "not-found" || "$startup_status" == "unknown" ]]; then
-  echo "ServiceManagement cannot resolve bundled LaunchAgent: $startup_status" >&2
+  echo "ServiceManagement cannot resolve login item app: $startup_status" >&2
   exit 1
 fi
 
@@ -131,4 +127,4 @@ echo "Bundle version: $BUNDLE_VERSION ($BUILD_NUMBER)"
 echo "App architectures: $(lipo -archs "$APP/Contents/MacOS/LinkVideo.Monitor")"
 echo "Capture helper architectures: $(lipo -archs "$APP/Contents/Resources/linkvideo-capture-helper")"
 echo "Service helper architectures: $(lipo -archs "$SERVICE_HELPER")"
-echo "Autostart agent status: $startup_status"
+echo "Autostart login item status: $startup_status"
