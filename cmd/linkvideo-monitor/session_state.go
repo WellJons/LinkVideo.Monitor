@@ -2,8 +2,8 @@ package main
 
 import "context"
 
-// sessionStateWatcher reports whether the interactive Windows session is
-// locked. The non-Windows implementation always reports an unlocked session.
+// sessionStateWatcher reports whether the current interactive desktop session is locked.
+// Each platform must use its own session model; lock and display sleep are separate states.
 type sessionStateWatcher interface {
 	Run(context.Context, func(bool))
 }
