@@ -41,7 +41,7 @@ func macOSServiceHelperPath() (string, error) {
 	if exe, err := os.Executable(); err == nil && exe != "" {
 		base := filepath.Dir(exe)
 		candidates := []string{
-			filepath.Clean(filepath.Join(base, "..", "Resources", "LinkVideoServiceHelper.app", "Contents", "MacOS", "LinkVideoServiceHelper")),
+			filepath.Clean(filepath.Join(base, "..", "Library", "LoginItems", "LinkVideoServiceHelper.app", "Contents", "MacOS", "LinkVideoServiceHelper")),
 			filepath.Join(base, "linkvideo-service-helper"),
 		}
 		for _, candidate := range candidates {
