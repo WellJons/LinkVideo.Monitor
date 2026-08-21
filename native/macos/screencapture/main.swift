@@ -293,7 +293,12 @@ func captureAudio() throws {
 
 func availableMicrophones() -> [AVCaptureDevice] {
     let defaultID = AVCaptureDevice.default(for: .audio)?.uniqueID
-    return AVCaptureDevice.devices(for: .audio).sorted { lhs, rhs in
+    let discovery = AVCaptureDevice.DiscoverySession(
+        deviceTypes: [.microphone],
+        mediaType: .audio,
+        position: .unspecified
+    )
+    return discovery.devices.sorted { lhs, rhs in
         let lhsDefault = lhs.uniqueID == defaultID
         let rhsDefault = rhs.uniqueID == defaultID
         if lhsDefault != rhsDefault { return lhsDefault }
