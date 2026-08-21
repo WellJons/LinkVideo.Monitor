@@ -23,10 +23,15 @@ import (
 )
 
 const (
-	appName    = "LinkVideo Monitor"
-	appVersion = "0.8.12"
-	listenAddr = "127.0.0.1:8098"
+	appName           = "LinkVideo Monitor"
+	windowsAppVersion = "0.8.12"
+	listenAddr        = "127.0.0.1:8098"
 )
+
+// appVersion is the externally reported release identity. Platform build
+// scripts can inject independent release versions without changing the Windows
+// 0.8.x compatibility version.
+var appVersion = currentReleaseVersion()
 
 //go:embed favicon.ico
 var faviconICO []byte

@@ -19,7 +19,7 @@ func currentReleaseVersion() string {
 	case "linux":
 		return "0.1.0-dev"
 	default:
-		return appVersion
+		return windowsAppVersion
 	}
 }
 
