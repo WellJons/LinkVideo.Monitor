@@ -30,15 +30,16 @@ type updateManifest struct {
 }
 
 type updateCheckResult struct {
-	CurrentVersion string `json:"current_version"`
-	LatestVersion  string `json:"latest_version"`
-	Platform       string `json:"platform"`
-	Architecture   string `json:"architecture"`
-	Available      bool   `json:"available"`
-	DownloadURL    string `json:"download_url,omitempty"`
-	SHA256         string `json:"sha256,omitempty"`
-	Notes          string `json:"notes,omitempty"`
-	Mandatory      bool   `json:"mandatory,omitempty"`
+	CurrentVersion   string `json:"current_version"`
+	LatestVersion    string `json:"latest_version"`
+	Platform         string `json:"platform"`
+	Architecture     string `json:"architecture"`
+	Available        bool   `json:"available"`
+	AutomaticInstall bool   `json:"automatic_install"`
+	DownloadURL      string `json:"download_url,omitempty"`
+	SHA256           string `json:"sha256,omitempty"`
+	Notes            string `json:"notes,omitempty"`
+	Mandatory        bool   `json:"mandatory,omitempty"`
 }
 
 type parsedVersion struct {
@@ -101,15 +102,16 @@ func checkForUpdates(ctx context.Context) (updateCheckResult, error) {
 		}
 	}
 	return updateCheckResult{
-		CurrentVersion: currentVersion,
-		LatestVersion:  m.Version,
-		Platform:       runtime.GOOS,
-		Architecture:   runtime.GOARCH,
-		Available:      cmp > 0,
-		DownloadURL:    m.DownloadURL,
-		SHA256:         m.SHA256,
-		Notes:          m.Notes,
-		Mandatory:      m.Mandatory,
+		CurrentVersion:   currentVersion,
+		LatestVersion:    m.Version,
+		Platform:         runtime.GOOS,
+		Architecture:     runtime.GOARCH,
+		Available:        cmp > 0,
+		AutomaticInstall: automaticUpdateInstallSupported(),
+		DownloadURL:      m.DownloadURL,
+		SHA256:           m.SHA256,
+		Notes:            m.Notes,
+		Mandatory:        m.Mandatory,
 	}, nil
 }
 
