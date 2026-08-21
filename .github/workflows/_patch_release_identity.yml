@@ -1,0 +1,73 @@
+name: Temporary release identity patch
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/_patch_release_identity.yml'
+      - 'cmd/linkvideo-monitor/main.go'
+      - 'cmd/linkvideo-monitor/release_identity.go'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.head_ref == 'feature/platform-release-identity'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.20.x'
+          cache: false
+      - name: Apply exact release identity patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          main = Path('cmd/linkvideo-monitor/main.go')
+          text = main.read_text()
+          old = '''const (\n\tappName    = "LinkVideo Monitor"\n\tappVersion = "0.8.12"\n\tlistenAddr = "127.0.0.1:8098"\n)'''
+          new = '''const (\n\tappName           = "LinkVideo Monitor"\n\twindowsAppVersion = "0.8.12"\n\tlistenAddr        = "127.0.0.1:8098"\n)\n\n// appVersion is the externally reported release identity. Platform build\n// scripts can inject independent release versions without changing the Windows\n// 0.8.x compatibility version.\nvar appVersion = currentReleaseVersion()'''
+          if old in text:
+              if text.count(old) != 1:
+                  raise SystemExit('unexpected main.go release block count')
+              main.write_text(text.replace(old, new))
+          elif new not in text:
+              raise SystemExit('main.go release identity block does not match expected source')
+
+          release = Path('cmd/linkvideo-monitor/release_identity.go')
+          text = release.read_text()
+          old = '''\tdefault:\n\t\treturn appVersion\n\t}'''
+          new = '''\tdefault:\n\t\treturn windowsAppVersion\n\t}'''
+          if old in text:
+              if text.count(old) != 1:
+                  raise SystemExit('unexpected release_identity.go fallback count')
+              release.write_text(text.replace(old, new))
+          elif new not in text:
+              raise SystemExit('release_identity.go fallback does not match expected source')
+          PY
+          gofmt -w cmd/linkvideo-monitor/main.go cmd/linkvideo-monitor/release_identity.go
+      - name: Validate shared and Windows builds
+        shell: bash
+        run: |
+          go test ./cmd/linkvideo-monitor
+          go vet ./cmd/linkvideo-monitor
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go test -c ./cmd/linkvideo-monitor -o /tmp/linkvideo-monitor.test.exe
+      - name: Commit code-only patch
+        shell: bash
+        run: |
+          if git diff --quiet -- cmd/linkvideo-monitor/main.go cmd/linkvideo-monitor/release_identity.go; then
+            echo 'Release identity already patched.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -- cmd/linkvideo-monitor/main.go cmd/linkvideo-monitor/release_identity.go
+          git commit -m 'Report platform-specific release version'
+          git push origin "HEAD:${GITHUB_HEAD_REF}"
