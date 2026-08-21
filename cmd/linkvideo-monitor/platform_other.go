@@ -4,10 +4,9 @@ package main
 
 import "errors"
 
-func syncStartupRegistration(enabled bool) error     { return nil }
-func syncURLProtocolRegistration() error             { return nil }
-func setSleepPrevention(enabled, keepDisplayOn bool) {}
-func lowerProcessPriority(pid int)                   {}
+func syncStartupRegistration(enabled bool) error { return nil }
+func syncURLProtocolRegistration() error         { return nil }
+func lowerProcessPriority(pid int)               {}
 func listWindows() ([]WindowInfo, error) {
 	return nil, errors.New("выбор окна поддерживается только в Windows")
 }

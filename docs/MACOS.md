@@ -17,6 +17,7 @@ Windows продолжает использовать `*_windows.go`, DXGI/GDI, 
 - системный звук через ScreenCaptureKit -> stereo 48 kHz S16LE -> существующий общий audio bridge/FFmpeg mix;
 - список микрофонов и захват выбранного микрофона через AVFoundation -> stereo 48 kHz S16LE;
 - общий microphone bridge сохраняет mute, level meter, voice activation и push-to-talk логику;
+- предотвращение idle sleep и, при необходимости, гашения дисплея через системный `/usr/bin/caffeinate`;
 - общий FFmpeg/RTSP/RTMP pipeline;
 - аппаратный H.264/H.265 через Apple VideoToolbox (`h264_videotoolbox` / `hevc_videotoolbox`);
 - общий realtime-probe и автоматический fallback с VideoToolbox на программный x264/x265, если аппаратный encoder недоступен;
@@ -38,6 +39,12 @@ Windows по-прежнему использует существующий FFmp
 После этого обработка полностью общая: level meter, mute, `always`, voice activation и push-to-talk работают в существующем Go microphone bridge, а system audio + microphone микшируются в общем FFmpeg pipeline.
 
 `NSMicrophoneUsageDescription` уже включён в macOS `Info.plist`. Для development ad-hoc build запрос разрешения должен появиться при первом включении микрофона; production build будет подписан Developer ID и notarized.
+
+## Сон и дисплей
+
+Общие настройки `PreventSleep` и `KeepDisplayOn` теперь работают на macOS. Пока поток должен быть активен, Monitor запускает системный `caffeinate` с `-i`; если включено сохранение дисплея — дополнительно с `-d`. Параметр `-w` привязывает assertion к PID LinkVideo Monitor, поэтому macOS автоматически освободит его при завершении приложения даже после аварийного выхода.
+
+При остановке или ошибке потока дочерний `caffeinate` завершается сразу. Windows продолжает использовать `SetThreadExecutionState`, поэтому изменения платформенно изолированы.
 
 ## FFmpeg в development-сборке
 
@@ -64,6 +71,7 @@ brew install ffmpeg
 - полноценная композиция нескольких дисплеев в режиме «все экраны» ещё не реализована;
 - system audio и microphone pipeline перенесены, но требуют реальной проверки TCC/уровней на физическом Mac;
 - глобальные macOS hotkeys для режима push-to-talk ещё не перенесены;
+- автозапуск при входе в macOS ещё не перенесён;
 - публичный релиз ещё не подписан Developer ID и не notarized;
 - development FFmpeg launcher не является финальным способом поставки FFmpeg.
 
