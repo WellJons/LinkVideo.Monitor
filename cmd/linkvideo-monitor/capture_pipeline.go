@@ -15,9 +15,10 @@ import (
 )
 
 const (
-	captureBackendAuto = "auto"
-	captureBackendDXGI = "dxgi"
-	captureBackendGDI  = "gdi"
+	captureBackendAuto      = "auto"
+	captureBackendDXGI      = "dxgi"
+	captureBackendGDI       = "gdi"
+	lockedCaptureStaleAfter = 1500 * time.Millisecond
 )
 
 type captureSupervisor struct {
@@ -30,6 +31,7 @@ type captureSupervisor struct {
 	latest         []byte
 	scratch        []byte
 	hasFrame       bool
+	latestAt       time.Time
 	backend        string
 	privacy        privacyTracker
 	secure         secureDesktopBridge
@@ -108,7 +110,7 @@ func captureBackendLabel(backend string) string {
 	case captureBackendDXGI:
 		return "Desktop Duplication"
 	case captureBackendGDI:
-		return "Совместимый захват Windows"
+		return compatibleCaptureBackendLabel()
 	default:
 		return backend
 	}
@@ -140,17 +142,19 @@ func (s *captureSupervisor) run(ctx context.Context) {
 		go s.privacy.Run(ctx)
 		s.app.appendLog("Защита конфиденциальных полей включена")
 	}
-	if secure, err := newSecureDesktopBridge(s.plan, s.cfg); err == nil {
-		s.mu.Lock()
-		s.secure = secure
-		locked := s.sessionLocked
-		s.mu.Unlock()
-		secure.SetSessionLocked(locked)
-		go secure.Run(ctx, s.handleSecureFrame)
-		defer secure.Close()
-		s.app.appendLog("Служба защищённого рабочего стола подключена")
-	} else {
-		s.app.appendLog("Захват UAC недоступен: " + err.Error())
+	if supportsSecureDesktopCapture() {
+		if secure, err := newSecureDesktopBridge(s.plan, s.cfg); err == nil {
+			s.mu.Lock()
+			s.secure = secure
+			locked := s.sessionLocked
+			s.mu.Unlock()
+			secure.SetSessionLocked(locked)
+			go secure.Run(ctx, s.handleSecureFrame)
+			defer secure.Close()
+			s.app.appendLog("Служба защищённого рабочего стола подключена")
+		} else {
+			s.app.appendLog("Захват защищённого рабочего стола недоступен: " + err.Error())
+		}
 	}
 	backend := s.initialBackend()
 	for {
@@ -296,6 +300,7 @@ func (s *captureSupervisor) readFrames(ctx context.Context, r io.Reader) error {
 		if !s.secureActive {
 			s.latest, s.scratch = s.scratch, s.latest
 			s.hasFrame = true
+			s.latestAt = time.Now()
 		}
 		s.mu.Unlock()
 		select {
@@ -313,8 +318,8 @@ func (s *captureSupervisor) writeFrames(ctx context.Context, w io.WriteCloser) e
 	defer ticker.Stop()
 
 	// Never hold the supervisor lock while writing a large raw frame to FFmpeg.
-	// A blocked pipe must not delay a Windows LOCK event or secure-desktop frame:
-	// otherwise one old desktop frame could be emitted when the pipe recovers.
+	// A blocked pipe must not delay a lock, display-power or protected-desktop
+	// transition; otherwise one old desktop frame could be emitted afterwards.
 	output := make([]byte, s.frameLen)
 	for {
 		select {
@@ -322,9 +327,11 @@ func (s *captureSupervisor) writeFrames(ctx context.Context, w io.WriteCloser) e
 			return ctx.Err()
 		case <-ticker.C:
 			s.mu.RLock()
+			staleLocked := shouldProtectStaleLockedFrame() && s.sessionLocked && !s.displayOff &&
+				(!s.hasFrame || s.latestAt.IsZero() || time.Since(s.latestAt) > lockedCaptureStaleAfter)
 			frame := selectOutputFrame(
 				s.latest, s.secureFrame, s.lockedFrame, s.protectedFrame,
-				s.sessionLocked, s.displayOff, s.secureActive, s.secureHasFrame,
+				s.sessionLocked, s.displayOff, s.secureActive, s.secureHasFrame, staleLocked,
 			)
 			copy(output, frame)
 			s.mu.RUnlock()
@@ -335,19 +342,22 @@ func (s *captureSupervisor) writeFrames(ctx context.Context, w io.WriteCloser) e
 	}
 }
 
-func selectOutputFrame(latest, secureFrame, lockedFrame, protectedFrame []byte, sessionLocked, displayOff, secureActive, secureHasFrame bool) []byte {
-	// The branded LinkVideo frame is shown only after Windows reports that the
-	// console display has actually powered off. A normal Win+L must continue to
-	// show the real Winlogon desktop whenever the SYSTEM helper can capture it.
+func selectOutputFrame(latest, secureFrame, lockedFrame, protectedFrame []byte, sessionLocked, displayOff, secureActive, secureHasFrame, staleLocked bool) []byte {
+	// Lock and display sleep are deliberately separate states. Keep a real lock
+	// screen while the platform can still capture it; show the branded LinkVideo
+	// frame only after the display itself has powered down.
 	if sessionLocked && displayOff {
 		return lockedFrame
 	}
 	if secureActive && secureHasFrame {
 		return secureFrame
 	}
-	// During the short Win+L handover keep the last real user frame instead of
-	// flashing an artificial placeholder. The secure frame replaces it as soon
-	// as Windows exposes the protected desktop.
+	// macOS may stop delivering ScreenCaptureKit frames after loginwindow takes
+	// over. Never repeat the pre-lock desktop indefinitely in that case. Windows
+	// keeps its existing SYSTEM/Winlogon handover and does not enable this policy.
+	if sessionLocked && staleLocked {
+		return protectedFrame
+	}
 	return latest
 }
 
@@ -393,9 +403,9 @@ func (s *captureSupervisor) handleSessionState(locked bool) {
 	s.app.sessionLocked = locked
 	s.app.mu.Unlock()
 	if locked {
-		s.app.appendLog("Сеанс Windows заблокирован; RTSP-поток продолжен без перезапуска")
+		s.app.appendLog("Сеанс пользователя заблокирован; RTSP-поток продолжен без перезапуска")
 	} else {
-		s.app.appendLog("Сеанс Windows разблокирован; RTSP-поток продолжен без перезапуска")
+		s.app.appendLog("Сеанс пользователя разблокирован; RTSP-поток продолжен без перезапуска")
 	}
 }
 
@@ -410,9 +420,9 @@ func (s *captureSupervisor) handleDisplayPowerState(off bool) {
 	}
 	if off {
 		if locked {
-			s.app.appendLog("Windows выключила дисплеи; включён фирменный экран LinkVideo без перезапуска потока")
+			s.app.appendLog("Система выключила дисплеи; включён фирменный экран LinkVideo без перезапуска потока")
 		} else {
-			s.app.appendLog("Windows выключила дисплеи")
+			s.app.appendLog("Система выключила дисплеи")
 		}
 	} else {
 		s.app.appendLog("Дисплеи включены; восстановлен обычный захват экрана без перезапуска потока")
