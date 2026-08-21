@@ -4,13 +4,20 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BUILD="$ROOT/build/macos"
 APP="$BUILD/LinkVideo.Monitor.app"
+SERVICE_APP="$APP/Contents/Library/LoginItems/LinkVideoServiceHelper.app"
+SERVICE_HELPER="$SERVICE_APP/Contents/MacOS/LinkVideoServiceHelper"
+SERVICE_BUNDLE_ID="ru.linkvideo.monitor.service-helper"
 VERSION="${MACOS_VERSION:-0.1.0-dev}"
 BUNDLE_VERSION="${VERSION%%[-+]*}"
 BUILD_NUMBER="${MACOS_BUILD_NUMBER:-1}"
 FFMPEG_TARGET="$APP/Contents/MacOS/ffmpeg.exe"
 
 rm -rf "$BUILD"
-mkdir -p "$BUILD" "$APP/Contents/MacOS" "$APP/Contents/Resources"
+mkdir -p \
+  "$BUILD" \
+  "$APP/Contents/MacOS" \
+  "$APP/Contents/Resources" \
+  "$SERVICE_APP/Contents/MacOS"
 
 for arch in arm64 x86_64; do
   goarch="$arch"
@@ -18,8 +25,8 @@ for arch in arm64 x86_64; do
     goarch="amd64"
   fi
 
-  echo "==> Go app $arch (GOARCH=$goarch, version=$VERSION)"
-  CGO_ENABLED=0 GOOS=darwin GOARCH="$goarch" \
+  echo "==> Go app $arch (GOARCH=$goarch, version=$VERSION, CGO=1)"
+  CGO_ENABLED=1 GOOS=darwin GOARCH="$goarch" \
     go build -trimpath \
       -ldflags="-s -w -X main.platformBuildVersion=$VERSION" \
       -o "$BUILD/LinkVideo.Monitor-$arch" "$ROOT/cmd/linkvideo-monitor"
@@ -35,6 +42,12 @@ for arch in arm64 x86_64; do
     -framework AVFoundation \
     -framework AudioToolbox \
     -o "$BUILD/linkvideo-capture-helper-$arch"
+
+  echo "==> Login item launcher $arch"
+  xcrun swiftc -O -whole-module-optimization \
+    -target "$arch-apple-macos13.0" \
+    "$ROOT/native/macos/servicemanagement/main.swift" \
+    -o "$BUILD/LinkVideoServiceHelper-$arch"
 done
 
 lipo -create \
@@ -47,15 +60,26 @@ lipo -create \
   "$BUILD/linkvideo-capture-helper-x86_64" \
   -output "$APP/Contents/Resources/linkvideo-capture-helper"
 
+lipo -create \
+  "$BUILD/LinkVideoServiceHelper-arm64" \
+  "$BUILD/LinkVideoServiceHelper-x86_64" \
+  -output "$SERVICE_HELPER"
+
 cp "$ROOT/packaging/macos/Info.plist" "$APP/Contents/Info.plist"
+cp "$ROOT/packaging/macos/ServiceHelper-Info.plist" "$SERVICE_APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $BUNDLE_VERSION" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $BUNDLE_VERSION" "$SERVICE_APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$SERVICE_APP/Contents/Info.plist"
+plutil -lint "$APP/Contents/Info.plist" >/dev/null
+plutil -lint "$SERVICE_APP/Contents/Info.plist" >/dev/null
 
-# The existing common configuration still uses the historical executable name
-# "ffmpeg.exe". On macOS we intentionally provide that name inside Contents/MacOS
-# so the shared resolveExecutable() path works without Windows-specific changes.
-# Release builds should pass FFMPEG_BINARY pointing to the bundled Universal
-# FFmpeg binary. Development builds use a tiny launcher that discovers Homebrew.
+actual_service_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$SERVICE_APP/Contents/Info.plist")"
+if [[ "$actual_service_id" != "$SERVICE_BUNDLE_ID" ]]; then
+  echo "Login item bundle id mismatch: $actual_service_id" >&2
+  exit 1
+fi
+
 if [[ -n "${FFMPEG_BINARY:-}" ]]; then
   cp "$FFMPEG_BINARY" "$FFMPEG_TARGET"
 else
@@ -85,17 +109,50 @@ fi
 chmod +x \
   "$APP/Contents/MacOS/LinkVideo.Monitor" \
   "$APP/Contents/MacOS/ffmpeg.exe" \
-  "$APP/Contents/Resources/linkvideo-capture-helper"
+  "$APP/Contents/Resources/linkvideo-capture-helper" \
+  "$SERVICE_HELPER"
 
 # CI/development signing only. Release builds will use Developer ID + notarization.
 codesign --force --sign - "$APP/Contents/Resources/linkvideo-capture-helper"
+codesign --force --sign - "$SERVICE_HELPER"
+codesign --force --deep --sign - "$SERVICE_APP"
 if file "$FFMPEG_TARGET" | grep -q 'Mach-O'; then
   codesign --force --sign - "$FFMPEG_TARGET"
 fi
 codesign --force --deep --sign - "$APP"
+codesign --verify --deep --strict "$SERVICE_APP"
+codesign --verify --deep --strict "$APP"
+
+app_archs="$(lipo -archs "$APP/Contents/MacOS/LinkVideo.Monitor")"
+capture_archs="$(lipo -archs "$APP/Contents/Resources/linkvideo-capture-helper")"
+service_archs="$(lipo -archs "$SERVICE_HELPER")"
+for required in arm64 x86_64; do
+  [[ " $app_archs " == *" $required "* ]] || { echo "Main app misses $required" >&2; exit 1; }
+  [[ " $capture_archs " == *" $required "* ]] || { echo "Capture helper misses $required" >&2; exit 1; }
+  [[ " $service_archs " == *" $required "* ]] || { echo "Login item misses $required" >&2; exit 1; }
+done
+
+# Probe the ServiceManagement bridge from the actual main executable. Ad-hoc
+# CI builds can legitimately report not-found because they are not installed
+# and signed with the production Developer ID. Production/release jobs can set
+# MACOS_REQUIRE_SERVICE_STATUS=1 to make that state fatal.
+startup_status="$("$APP/Contents/MacOS/LinkVideo.Monitor" --startup-status)"
+if [[ "$startup_status" == "unknown" ]]; then
+  echo "Unknown ServiceManagement login item status" >&2
+  exit 1
+fi
+if [[ "$startup_status" == "not-found" ]]; then
+  if [[ "${MACOS_REQUIRE_SERVICE_STATUS:-0}" == "1" ]]; then
+    echo "ServiceManagement cannot resolve production login item" >&2
+    exit 1
+  fi
+  echo "Ad-hoc development build: ServiceManagement status is not-found; production signing will re-check registration"
+fi
 
 echo "Built: $APP"
 echo "Release version: $VERSION"
 echo "Bundle version: $BUNDLE_VERSION ($BUILD_NUMBER)"
-echo "App architectures: $(lipo -archs "$APP/Contents/MacOS/LinkVideo.Monitor")"
-echo "Helper architectures: $(lipo -archs "$APP/Contents/Resources/linkvideo-capture-helper")"
+echo "App architectures: $app_archs"
+echo "Capture helper architectures: $capture_archs"
+echo "Login item architectures: $service_archs"
+echo "Autostart login item status: $startup_status"
