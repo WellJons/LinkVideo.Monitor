@@ -41,10 +41,39 @@ func setStartup(_ enabled: Bool) throws {
     print(statusName(item.status))
 }
 
+func parentMonitorExecutable() throws -> URL {
+    let helperApp = Bundle.main.bundleURL
+    let parentContents = helperApp
+        .deletingLastPathComponent() // Resources
+        .deletingLastPathComponent() // Contents
+    let executable = parentContents
+        .appendingPathComponent("MacOS", isDirectory: true)
+        .appendingPathComponent("LinkVideo.Monitor", isDirectory: false)
+    guard FileManager.default.isExecutableFile(atPath: executable.path) else {
+        throw NSError(
+            domain: "LinkVideoServiceHelper",
+            code: 3,
+            userInfo: [NSLocalizedDescriptionKey: "Не найден основной LinkVideo Monitor: \(executable.path)"]
+        )
+    }
+    return executable
+}
+
+func runMonitorInBackground() throws {
+    let process = Process()
+    process.executableURL = try parentMonitorExecutable()
+    process.arguments = ["--background"]
+    try process.run()
+}
+
 func main() throws {
     let args = Array(CommandLine.arguments.dropFirst())
     if args.contains("--startup-status") {
         print(statusName(service().status))
+        return
+    }
+    if args.contains("--autostart-run") {
+        try runMonitorInBackground()
         return
     }
     if let index = args.firstIndex(of: "--set-startup"), index + 1 < args.count {
@@ -54,7 +83,7 @@ func main() throws {
         try setStartup(enabled)
         return
     }
-    fputs("Usage: linkvideo-service-helper --startup-status | --set-startup true|false\n", stderr)
+    fputs("Usage: LinkVideoServiceHelper --startup-status | --set-startup true|false | --autostart-run\n", stderr)
     exit(2)
 }
 
