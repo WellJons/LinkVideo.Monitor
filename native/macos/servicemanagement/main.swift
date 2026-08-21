@@ -42,11 +42,11 @@ func setStartup(_ enabled: Bool) throws {
 func parentMonitorExecutable() throws -> URL {
     let helperApp = Bundle.main.bundleURL
     // <Parent>.app/Contents/Library/LoginItems/LinkVideoServiceHelper.app
+    // Three parents from the helper bundle lead to <Parent>.app/Contents.
     let parentContents = helperApp
         .deletingLastPathComponent() // LoginItems
         .deletingLastPathComponent() // Library
         .deletingLastPathComponent() // Contents
-        .appendingPathComponent("Contents", isDirectory: true)
     let executable = parentContents
         .appendingPathComponent("MacOS", isDirectory: true)
         .appendingPathComponent("LinkVideo.Monitor", isDirectory: false)
