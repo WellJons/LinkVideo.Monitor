@@ -6,7 +6,7 @@ LinkVideo Monitor развивается в одном репозитории д
 
 Общая логика остаётся в `cmd/linkvideo-monitor`. Платформенные реализации подключаются через Go build constraints и нативные helpers.
 
-Windows продолжает использовать `*_windows.go`, DXGI/GDI, WASAPI, Win32 UI, Windows installer и Windows FFmpeg. macOS использует `*_darwin.go`, ScreenCaptureKit helper и отдельную `.app`/`.dmg` упаковку.
+Windows продолжает использовать `*_windows.go`, DXGI/GDI, WASAPI, Win32 UI, Windows installer и Windows FFmpeg. macOS использует `*_darwin.go`, ScreenCaptureKit/AVFoundation helper и отдельную `.app`/`.dmg` упаковку.
 
 ## Что уже работает на macOS
 
@@ -15,6 +15,8 @@ Windows продолжает использовать `*_windows.go`, DXGI/GDI, 
 - выбор конкретного дисплея по `SCDisplayID`;
 - ScreenCaptureKit -> BGRA -> существующий `captureSupervisor`;
 - системный звук через ScreenCaptureKit -> stereo 48 kHz S16LE -> существующий общий audio bridge/FFmpeg mix;
+- список микрофонов и захват выбранного микрофона через AVFoundation -> stereo 48 kHz S16LE;
+- общий microphone bridge сохраняет mute, level meter, voice activation и push-to-talk логику;
 - общий FFmpeg/RTSP/RTMP pipeline;
 - аппаратный H.264/H.265 через Apple VideoToolbox (`h264_videotoolbox` / `hevc_videotoolbox`);
 - общий realtime-probe и автоматический fallback с VideoToolbox на программный x264/x265, если аппаратный encoder недоступен;
@@ -29,7 +31,13 @@ Windows продолжает использовать `*_windows.go`, DXGI/GDI, 
 
 На Windows общий audio bridge получает PCM из WASAPI Loopback. На macOS тот же bridge вызывает отдельный режим ScreenCaptureKit helper (`--capture-audio`). Helper просит ScreenCaptureKit выдавать 48 kHz stereo, преобразует системный Float32 PCM в interleaved signed 16-bit little-endian и пишет его в существующий локальный TCP audio channel.
 
-Это сохраняет общую FFmpeg-схему: системный звук и будущий микрофон микшируются уже в общем Go/FFmpeg pipeline, а платформенная часть отвечает только за получение PCM.
+## Микрофон
+
+Windows по-прежнему использует существующий FFmpeg DirectShow source. На macOS список устройств и PCM приходят из AVFoundation helper (`--list-microphones` / `--capture-microphone`). Helper запрашивает стандартное разрешение macOS на микрофон, выбирает устройство по имени и выдаёт 48 kHz stereo S16LE.
+
+После этого обработка полностью общая: level meter, mute, `always`, voice activation и push-to-talk работают в существующем Go microphone bridge, а system audio + microphone микшируются в общем FFmpeg pipeline.
+
+`NSMicrophoneUsageDescription` уже включён в macOS `Info.plist`. Для development ad-hoc build запрос разрешения должен появиться при первом включении микрофона; production build будет подписан Developer ID и notarized.
 
 ## FFmpeg в development-сборке
 
@@ -48,13 +56,14 @@ Launcher ищет FFmpeg в таком порядке:
 brew install ffmpeg
 ```
 
-После этого можно открыть `LinkVideo.Monitor.app` из development DMG. При первом обращении к экрану или системному звуку macOS должна запросить разрешение Screen Recording. Доступность VideoToolbox дополнительно проверяется самим FFmpeg перед запуском потока; при ошибке общий механизм выбора кодировщика использует software fallback.
+После этого можно открыть `LinkVideo.Monitor.app` из development DMG. При первом обращении к экрану или системному звуку macOS должна запросить разрешение Screen Recording, а при первом включении микрофона — отдельное разрешение Microphone. Доступность VideoToolbox дополнительно проверяется самим FFmpeg перед запуском потока; при ошибке общий механизм выбора кодировщика использует software fallback.
 
 ## Ограничения текущего этапа
 
 - режим одного выбранного дисплея уже сопоставляется с настоящим Mac-дисплеем;
 - полноценная композиция нескольких дисплеев в режиме «все экраны» ещё не реализована;
-- системный звук перенесён, микрофон ещё не перенесён;
+- system audio и microphone pipeline перенесены, но требуют реальной проверки TCC/уровней на физическом Mac;
+- глобальные macOS hotkeys для режима push-to-talk ещё не перенесены;
 - публичный релиз ещё не подписан Developer ID и не notarized;
 - development FFmpeg launcher не является финальным способом поставки FFmpeg.
 

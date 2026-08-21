@@ -4,6 +4,7 @@ import CoreGraphics
 import CoreMedia
 import CoreVideo
 import AVFoundation
+import AudioToolbox
 
 struct DisplayInfo: Codable {
     let id: UInt32
@@ -22,6 +23,9 @@ enum HelperError: LocalizedError {
     case displayNotFound(UInt32)
     case shareableContent(String)
     case stream(String)
+    case microphonePermission
+    case microphoneNotFound(String)
+    case microphoneCapture(String)
 
     var errorDescription: String? {
         switch self {
@@ -29,6 +33,9 @@ enum HelperError: LocalizedError {
         case .displayNotFound(let id): return "Дисплей \(id) не найден"
         case .shareableContent(let message): return "ScreenCaptureKit: \(message)"
         case .stream(let message): return "Захват экрана: \(message)"
+        case .microphonePermission: return "Нет разрешения macOS на доступ к микрофону"
+        case .microphoneNotFound(let name): return "Микрофон «\(name)» не найден"
+        case .microphoneCapture(let message): return "Захват микрофона: \(message)"
         }
     }
 }
@@ -172,6 +179,34 @@ final class AudioOutput: NSObject, SCStreamOutput, SCStreamDelegate {
     }
 }
 
+final class MicrophoneOutput: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate {
+    private let output = FileHandle.standardOutput
+
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        guard sampleBuffer.isValid,
+              let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { return }
+        let length = CMBlockBufferGetDataLength(blockBuffer)
+        guard length > 0 else { return }
+
+        var data = Data(count: length)
+        let status: OSStatus = data.withUnsafeMutableBytes { rawBuffer in
+            guard let destination = rawBuffer.baseAddress else { return -1 }
+            return CMBlockBufferCopyDataBytes(
+                blockBuffer,
+                atOffset: 0,
+                dataLength: length,
+                destination: destination
+            )
+        }
+        if status == 0 {
+            self.output.write(data)
+        } else {
+            fputs("AVFoundation microphone sample error: \(status)\n", stderr)
+            fflush(stderr)
+        }
+    }
+}
+
 func value(after key: String, in args: [String]) -> String? {
     guard let index = args.firstIndex(of: key), index + 1 < args.count else { return nil }
     return args[index + 1]
@@ -256,6 +291,107 @@ func captureAudio() throws {
     try startStream(stream, output: output)
 }
 
+func availableMicrophones() -> [AVCaptureDevice] {
+    let defaultID = AVCaptureDevice.default(for: .audio)?.uniqueID
+    return AVCaptureDevice.devices(for: .audio).sorted { lhs, rhs in
+        let lhsDefault = lhs.uniqueID == defaultID
+        let rhsDefault = rhs.uniqueID == defaultID
+        if lhsDefault != rhsDefault { return lhsDefault }
+        let nameOrder = lhs.localizedName.localizedCaseInsensitiveCompare(rhs.localizedName)
+        if nameOrder != .orderedSame { return nameOrder == .orderedAscending }
+        return lhs.uniqueID < rhs.uniqueID
+    }
+}
+
+func listMicrophones() throws {
+    var seen = Set<String>()
+    let names = availableMicrophones().compactMap { device -> String? in
+        let name = device.localizedName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, !seen.contains(name) else { return nil }
+        seen.insert(name)
+        return name
+    }
+    let data = try JSONEncoder().encode(names)
+    FileHandle.standardOutput.write(data)
+}
+
+func ensureMicrophonePermission() throws {
+    switch AVCaptureDevice.authorizationStatus(for: .audio) {
+    case .authorized:
+        return
+    case .notDetermined:
+        let semaphore = DispatchSemaphore(value: 0)
+        var granted = false
+        AVCaptureDevice.requestAccess(for: .audio) { value in
+            granted = value
+            semaphore.signal()
+        }
+        semaphore.wait()
+        if !granted { throw HelperError.microphonePermission }
+    default:
+        throw HelperError.microphonePermission
+    }
+}
+
+func captureMicrophone(args: [String]) throws {
+    try ensureMicrophonePermission()
+
+    let requestedName = (value(after: "--device", in: args) ?? "")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !requestedName.isEmpty else {
+        throw HelperError.microphoneNotFound("")
+    }
+    guard let device = availableMicrophones().first(where: { $0.localizedName == requestedName }) else {
+        throw HelperError.microphoneNotFound(requestedName)
+    }
+
+    let sampleRate = max(8_000, min(192_000, Int(value(after: "--sample-rate", in: args) ?? "48000") ?? 48_000))
+    let channels = max(1, min(2, Int(value(after: "--channels", in: args) ?? "2") ?? 2))
+
+    let session = AVCaptureSession()
+    session.beginConfiguration()
+
+    let input: AVCaptureDeviceInput
+    do {
+        input = try AVCaptureDeviceInput(device: device)
+    } catch {
+        throw HelperError.microphoneCapture(error.localizedDescription)
+    }
+    guard session.canAddInput(input) else {
+        throw HelperError.microphoneCapture("устройство нельзя добавить в capture session")
+    }
+    session.addInput(input)
+
+    let audioOutput = AVCaptureAudioDataOutput()
+    audioOutput.audioSettings = [
+        AVFormatIDKey: kAudioFormatLinearPCM,
+        AVSampleRateKey: sampleRate,
+        AVNumberOfChannelsKey: channels,
+        AVLinearPCMBitDepthKey: 16,
+        AVLinearPCMIsFloatKey: false,
+        AVLinearPCMIsBigEndianKey: false,
+        AVLinearPCMIsNonInterleaved: false,
+    ]
+    guard session.canAddOutput(audioOutput) else {
+        throw HelperError.microphoneCapture("PCM output нельзя добавить в capture session")
+    }
+    session.addOutput(audioOutput)
+
+    let delegate = MicrophoneOutput()
+    let queue = DispatchQueue(label: "ru.linkvideo.monitor.microphone", qos: .userInitiated)
+    audioOutput.setSampleBufferDelegate(delegate, queue: queue)
+
+    session.commitConfiguration()
+    session.startRunning()
+    guard session.isRunning else {
+        throw HelperError.microphoneCapture("capture session не запустилась")
+    }
+
+    withExtendedLifetime((session, input, audioOutput, delegate, queue)) {
+        RunLoop.main.run()
+    }
+}
+
 func main() throws {
     let args = Array(CommandLine.arguments.dropFirst())
     if args.contains("--check-permission") {
@@ -274,6 +410,14 @@ func main() throws {
         FileHandle.standardOutput.write(data)
         return
     }
+    if args.contains("--list-microphones") {
+        try listMicrophones()
+        return
+    }
+    if args.contains("--capture-microphone") {
+        try captureMicrophone(args: args)
+        return
+    }
     if args.contains("--capture-audio") {
         try captureAudio()
         return
@@ -282,7 +426,7 @@ func main() throws {
         try capture(args: args)
         return
     }
-    fputs("Usage: linkvideo-capture-helper --check-permission | --request-permission | --list-displays | --capture | --capture-audio\n", stderr)
+    fputs("Usage: linkvideo-capture-helper --check-permission | --request-permission | --list-displays | --list-microphones | --capture | --capture-audio | --capture-microphone ...\n", stderr)
     exit(2)
 }
 
