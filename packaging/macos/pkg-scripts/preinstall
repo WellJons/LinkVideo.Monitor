@@ -1,0 +1,29 @@
+#!/bin/bash
+set -u
+
+APP="/Applications/LinkVideo.Monitor.app"
+BIN="$APP/Contents/MacOS/LinkVideo.Monitor"
+
+terminate_tree() {
+  local pid="$1"
+  local child
+  for child in $(/usr/bin/pgrep -P "$pid" 2>/dev/null || true); do
+    terminate_tree "$child"
+  done
+  /bin/kill -TERM "$pid" 2>/dev/null || true
+}
+
+pids="$(/usr/bin/pgrep -f "$BIN" 2>/dev/null || true)"
+for pid in $pids; do
+  terminate_tree "$pid"
+done
+
+if [[ -n "$pids" ]]; then
+  /bin/sleep 1
+fi
+
+for pid in $(/usr/bin/pgrep -f "$BIN" 2>/dev/null || true); do
+  /bin/kill -KILL "$pid" 2>/dev/null || true
+done
+
+exit 0
