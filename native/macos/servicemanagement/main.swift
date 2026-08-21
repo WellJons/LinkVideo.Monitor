@@ -1,8 +1,6 @@
 import Foundation
 import ServiceManagement
 
-private let agentPlistName = "ru.linkvideo.monitor.autostart.plist"
-
 func statusName(_ status: SMAppService.Status) -> String {
     switch status {
     case .notRegistered: return "not-registered"
@@ -14,7 +12,7 @@ func statusName(_ status: SMAppService.Status) -> String {
 }
 
 func service() -> SMAppService {
-    SMAppService.agent(plistName: agentPlistName)
+    SMAppService.mainApp
 }
 
 func setStartup(_ enabled: Bool) throws {
@@ -43,9 +41,12 @@ func setStartup(_ enabled: Bool) throws {
 
 func parentMonitorExecutable() throws -> URL {
     let helperApp = Bundle.main.bundleURL
+    // <Parent>.app/Contents/Library/LoginItems/LinkVideoServiceHelper.app
     let parentContents = helperApp
-        .deletingLastPathComponent() // Resources
+        .deletingLastPathComponent() // LoginItems
+        .deletingLastPathComponent() // Library
         .deletingLastPathComponent() // Contents
+        .appendingPathComponent("Contents", isDirectory: true)
     let executable = parentContents
         .appendingPathComponent("MacOS", isDirectory: true)
         .appendingPathComponent("LinkVideo.Monitor", isDirectory: false)
@@ -72,15 +73,15 @@ func main() throws {
         print(statusName(service().status))
         return
     }
-    if args.contains("--autostart-run") {
-        try runMonitorInBackground()
-        return
-    }
     if let index = args.firstIndex(of: "--set-startup"), index + 1 < args.count {
         guard let enabled = Bool(args[index + 1]) else {
             throw NSError(domain: "LinkVideoServiceHelper", code: 2, userInfo: [NSLocalizedDescriptionKey: "Неверное значение --set-startup"])
         }
         try setStartup(enabled)
+        return
+    }
+    if args.isEmpty || args.contains("--autostart-run") {
+        try runMonitorInBackground()
         return
     }
     fputs("Usage: LinkVideoServiceHelper --startup-status | --set-startup true|false | --autostart-run\n", stderr)
