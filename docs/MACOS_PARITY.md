@@ -67,7 +67,7 @@
 - [x] Platform-specific update manifest and update capability reporting
 - [ ] Signed/notarized automatic macOS updater
 - [ ] Bundled pinned Universal FFmpeg
-- [ ] Bundled pinned Universal MediaMTX
+- [x] Bundled pinned Universal MediaMTX with upstream checksum verification
 
 ## Правило архитектуры
 

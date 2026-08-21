@@ -45,11 +45,14 @@ jobs:
       - name: Check macOS packaging scripts
         run: |
           bash -n scripts/macos/build-app.sh
+          bash -n scripts/macos/fetch-mediamtx.sh
           bash -n scripts/macos/package-pkg.sh
           bash -n scripts/macos/package-dmg.sh
           bash -n 'packaging/macos/Uninstall LinkVideo Monitor.command'
           bash -n packaging/macos/pkg-scripts/preinstall
       - name: Build Universal macOS app
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: scripts/macos/build-app.sh
       - name: Verify app bundle
         run: |
@@ -62,6 +65,10 @@ jobs:
           test -x "$APP/Contents/Resources/linkvideo-workspace-helper"
           test -x "$APP/Contents/Resources/linkvideo-overlay-helper"
           test -x "$APP/Contents/Resources/linkvideo-hotkey-helper"
+          file "$APP/Contents/MacOS/mediamtx" | grep -q 'Mach-O'
+          lipo -archs "$APP/Contents/MacOS/mediamtx" | grep -q arm64
+          lipo -archs "$APP/Contents/MacOS/mediamtx" | grep -q x86_64
+          "$APP/Contents/MacOS/mediamtx" --version 2>&1 | grep -q '1.20.0'
           plutil -lint "$APP/Contents/Info.plist"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP/Contents/Info.plist")" = '13.0'
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" = '0.1.0'
