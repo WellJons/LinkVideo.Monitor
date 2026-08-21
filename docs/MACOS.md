@@ -15,6 +15,9 @@ Windows продолжает использовать `*_windows.go`, DXGI/GDI, 
 - выбор конкретного дисплея по `SCDisplayID`;
 - ScreenCaptureKit -> BGRA -> существующий `captureSupervisor`;
 - общий FFmpeg/RTSP/RTMP pipeline;
+- аппаратный H.264/H.265 через Apple VideoToolbox (`h264_videotoolbox` / `hevc_videotoolbox`);
+- общий realtime-probe и автоматический fallback с VideoToolbox на программный x264/x265, если аппаратный encoder недоступен;
+- GOP остаётся фиксированным в 2 секунды и B-frames отключены так же, как на Windows;
 - Universal приложение `arm64 + x86_64`;
 - независимая macOS release-версия `0.1.x`;
 - отдельный `update-manifest-macos.json`;
@@ -38,13 +41,12 @@ Launcher ищет FFmpeg в таком порядке:
 brew install ffmpeg
 ```
 
-После этого можно открыть `LinkVideo.Monitor.app` из development DMG. При первом обращении к экрану macOS должна запросить разрешение Screen Recording.
+После этого можно открыть `LinkVideo.Monitor.app` из development DMG. При первом обращении к экрану macOS должна запросить разрешение Screen Recording. Доступность VideoToolbox дополнительно проверяется самим FFmpeg перед запуском потока; при ошибке общий механизм выбора кодировщика использует software fallback.
 
 ## Ограничения текущего этапа
 
 - режим одного выбранного дисплея уже сопоставляется с настоящим Mac-дисплеем;
 - полноценная композиция нескольких дисплеев в режиме «все экраны» ещё не реализована;
-- VideoToolbox пока не включён в общий automatic encoder selection;
 - системный звук и микрофон ещё не перенесены;
 - публичный релиз ещё не подписан Developer ID и не notarized;
 - development FFmpeg launcher не является финальным способом поставки FFmpeg.

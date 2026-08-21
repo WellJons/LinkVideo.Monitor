@@ -19,10 +19,11 @@ func TestRuntimePresetCandidatesUseFasterPresetsAtSameFPS(t *testing.T) {
 
 func TestH265FallbackPrefersMatchingH264Hardware(t *testing.T) {
 	cases := map[string]string{
-		"hevc_nvenc": "h264_nvenc",
-		"hevc_qsv":   "h264_qsv",
-		"hevc_amf":   "h264_amf",
-		"libx265":    "",
+		"hevc_nvenc":        "h264_nvenc",
+		"hevc_qsv":          "h264_qsv",
+		"hevc_amf":          "h264_amf",
+		"hevc_videotoolbox": "h264_videotoolbox",
+		"libx265":           "",
 	}
 	for input, want := range cases {
 		if got := h264FallbackEncoderName(input); got != want {

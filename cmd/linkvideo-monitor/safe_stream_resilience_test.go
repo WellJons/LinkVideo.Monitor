@@ -42,7 +42,7 @@ func TestEncoderUsesBoundedResilienceQueues(t *testing.T) {
 }
 
 func TestAllStreamingEncodersKeepNormalPriority(t *testing.T) {
-	for _, encoder := range []string{"libx264", "libx265", "h264_qsv", "hevc_qsv", "h264_nvenc", "hevc_nvenc", "h264_amf", "hevc_amf"} {
+	for _, encoder := range []string{"libx264", "libx265", "h264_qsv", "hevc_qsv", "h264_nvenc", "hevc_nvenc", "h264_amf", "hevc_amf", "h264_videotoolbox", "hevc_videotoolbox"} {
 		if !keepNormalStreamingPriority(encoder, false) {
 			t.Fatalf("%s unexpectedly eligible for below-normal streaming priority", encoder)
 		}

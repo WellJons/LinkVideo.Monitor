@@ -21,14 +21,16 @@ type encoderFailureState struct {
 }
 
 var encoderLabels = map[string]string{
-	"h264_nvenc": "NVIDIA NVENC · H.264",
-	"h264_qsv":   "Intel Quick Sync · H.264",
-	"h264_amf":   "AMD AMF · H.264",
-	"libx264":    "Программный H.264",
-	"hevc_nvenc": "NVIDIA NVENC · H.265",
-	"hevc_qsv":   "Intel Quick Sync · H.265",
-	"hevc_amf":   "AMD AMF · H.265",
-	"libx265":    "Программный H.265",
+	"h264_nvenc":        "NVIDIA NVENC · H.264",
+	"h264_qsv":          "Intel Quick Sync · H.264",
+	"h264_amf":          "AMD AMF · H.264",
+	"h264_videotoolbox": "Apple VideoToolbox · H.264",
+	"libx264":           "Программный H.264",
+	"hevc_nvenc":        "NVIDIA NVENC · H.265",
+	"hevc_qsv":          "Intel Quick Sync · H.265",
+	"hevc_amf":          "AMD AMF · H.265",
+	"hevc_videotoolbox": "Apple VideoToolbox · H.265",
+	"libx265":           "Программный H.265",
 }
 
 func encoderLabel(name string) string {
@@ -54,6 +56,9 @@ func automaticEncoderCandidates(codec string) []encoderOption {
 	if codec == "h265" {
 		prefix = "hevc"
 		software = "libx265"
+	}
+	for _, option := range platformHardwareEncoderCandidates(codec) {
+		add(option.Name)
 	}
 	if strings.Contains(names, "nvidia") {
 		add(prefix + "_nvenc")
@@ -123,6 +128,8 @@ func probeVideoEncoder(cfg Config, encoder string, plan capturePlan) error {
 		args = append(args, "-preset", "medium", "-look_ahead", "0")
 	case "h264_amf", "hevc_amf":
 		args = append(args, "-usage", "lowlatency", "-quality", "balanced", "-rc", "vbr_peak")
+	case "h264_videotoolbox", "hevc_videotoolbox":
+		args = append(args, "-realtime", "1", "-allow_sw", "0", "-prio_speed", "1")
 	case "libx264":
 		args = append(args, "-preset", "veryfast", "-tune", "zerolatency")
 	case "libx265":

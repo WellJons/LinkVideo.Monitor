@@ -328,6 +328,10 @@ func migrateLegacyConfig(newPath string) error {
 func (a *app) loadConfig() error {
 	b, err := os.ReadFile(a.cfgPath)
 	if errors.Is(err, os.ErrNotExist) {
+		// Keep defaultConfig platform-neutral for shared tests and old config
+		// semantics. Only a genuinely fresh macOS installation starts on the
+		// native VideoToolbox encoder. Existing user choices are preserved.
+		a.cfg.Encoder = defaultEncoderForPlatform(a.cfg.Codec)
 		return a.saveConfigLocked()
 	}
 	if err != nil {
@@ -466,8 +470,8 @@ func normalizeConfig(c *Config) {
 		c.Encoder = softwareEncoderForCodec(c.Codec)
 	}
 	validEncoders := map[string]bool{
-		"libx264": true, "h264_nvenc": true, "h264_amf": true, "h264_qsv": true,
-		"libx265": true, "hevc_nvenc": true, "hevc_amf": true, "hevc_qsv": true,
+		"libx264": true, "h264_nvenc": true, "h264_amf": true, "h264_qsv": true, "h264_videotoolbox": true,
+		"libx265": true, "hevc_nvenc": true, "hevc_amf": true, "hevc_qsv": true, "hevc_videotoolbox": true,
 	}
 	if !validEncoders[c.Encoder] {
 		c.Encoder = softwareEncoderForCodec(c.Codec)
@@ -1452,6 +1456,13 @@ func buildEncoderFFmpegDetailed(cfg Config, plan capturePlan, encoder, systemAud
 			"-c:v", encoder,
 			"-preset", "medium",
 			"-look_ahead", "0",
+			"-bf", "0")
+	case "h264_videotoolbox", "hevc_videotoolbox":
+		args = append(args,
+			"-c:v", encoder,
+			"-realtime", "1",
+			"-allow_sw", "0",
+			"-prio_speed", "1",
 			"-bf", "0")
 	case "libx265":
 		x265Params := fmt.Sprintf("keyint=%d:min-keyint=%d:scenecut=0:open-gop=0:repeat-headers=1", gopFrames, gopFrames)
