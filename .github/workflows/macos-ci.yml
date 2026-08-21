@@ -3,7 +3,7 @@ name: macOS CI
 on:
   push:
     branches:
-      - feature/macos-port
+      - main
     paths:
       - 'cmd/linkvideo-monitor/**'
       - 'native/macos/**'
