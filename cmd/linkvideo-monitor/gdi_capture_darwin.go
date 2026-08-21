@@ -28,9 +28,10 @@ func runGDICapture(out io.Writer, x, y, width, height, outputWidth, outputHeight
 		fps = 15
 	}
 
+	displayID := macOSDisplayIDForCaptureRect(x, y, width, height)
 	args := []string{
 		"--capture",
-		"--display-id", "0", // 0 = primary display; multi-display mapping comes next.
+		"--display-id", strconv.FormatUint(uint64(displayID), 10),
 		"--width", strconv.Itoa(outputWidth),
 		"--height", strconv.Itoa(outputHeight),
 		"--fps", strconv.Itoa(fps),

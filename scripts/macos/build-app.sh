@@ -5,6 +5,8 @@ ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BUILD="$ROOT/build/macos"
 APP="$BUILD/LinkVideo.Monitor.app"
 VERSION="${MACOS_VERSION:-0.1.0-dev}"
+BUNDLE_VERSION="${VERSION%%[-+]*}"
+BUILD_NUMBER="${MACOS_BUILD_NUMBER:-1}"
 
 rm -rf "$BUILD"
 mkdir -p "$BUILD" "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -15,9 +17,11 @@ for arch in arm64 x86_64; do
     goarch="amd64"
   fi
 
-  echo "==> Go app $arch (GOARCH=$goarch)"
+  echo "==> Go app $arch (GOARCH=$goarch, version=$VERSION)"
   CGO_ENABLED=0 GOOS=darwin GOARCH="$goarch" \
-    go build -trimpath -o "$BUILD/LinkVideo.Monitor-$arch" "$ROOT/cmd/linkvideo-monitor"
+    go build -trimpath \
+      -ldflags="-s -w -X main.platformBuildVersion=$VERSION" \
+      -o "$BUILD/LinkVideo.Monitor-$arch" "$ROOT/cmd/linkvideo-monitor"
 
   echo "==> ScreenCaptureKit helper $arch"
   xcrun swiftc -O -whole-module-optimization \
@@ -41,7 +45,8 @@ lipo -create \
   -output "$APP/Contents/Resources/linkvideo-capture-helper"
 
 cp "$ROOT/packaging/macos/Info.plist" "$APP/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $BUNDLE_VERSION" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Contents/Info.plist"
 
 if [[ -n "${FFMPEG_BINARY:-}" ]]; then
   cp "$FFMPEG_BINARY" "$APP/Contents/Resources/ffmpeg"
@@ -55,5 +60,7 @@ codesign --force --sign - "$APP/Contents/Resources/linkvideo-capture-helper"
 codesign --force --deep --sign - "$APP"
 
 echo "Built: $APP"
+echo "Release version: $VERSION"
+echo "Bundle version: $BUNDLE_VERSION ($BUILD_NUMBER)"
 echo "App architectures: $(lipo -archs "$APP/Contents/MacOS/LinkVideo.Monitor")"
 echo "Helper architectures: $(lipo -archs "$APP/Contents/Resources/linkvideo-capture-helper")"
