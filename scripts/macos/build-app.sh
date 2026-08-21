@@ -8,7 +8,7 @@ VERSION="${MACOS_VERSION:-0.1.0-dev}"
 BUNDLE_VERSION="${VERSION%%[-+]*}"
 BUILD_NUMBER="${MACOS_BUILD_NUMBER:-1}"
 FFMPEG_TARGET="$APP/Contents/MacOS/ffmpeg.exe"
-SERVICE_HELPER="$APP/Contents/Resources/linkvideo-service-helper"
+SERVICE_HELPER="$APP/Contents/MacOS/linkvideo-service-helper"
 AGENT_PLIST="$APP/Contents/Library/LaunchAgents/ru.linkvideo.monitor.autostart.plist"
 
 rm -rf "$BUILD"
@@ -67,11 +67,6 @@ cp "$ROOT/packaging/macos/ru.linkvideo.monitor.autostart.plist" "$AGENT_PLIST"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Contents/Info.plist"
 plutil -lint "$AGENT_PLIST" >/dev/null
 
-# The existing common configuration still uses the historical executable name
-# "ffmpeg.exe". On macOS we intentionally provide that name inside Contents/MacOS
-# so the shared resolveExecutable() path works without Windows-specific changes.
-# Release builds should pass FFMPEG_BINARY pointing to the bundled Universal
-# FFmpeg binary. Development builds use a tiny launcher that discovers Homebrew.
 if [[ -n "${FFMPEG_BINARY:-}" ]]; then
   cp "$FFMPEG_BINARY" "$FFMPEG_TARGET"
 else
@@ -104,7 +99,6 @@ chmod +x \
   "$APP/Contents/Resources/linkvideo-capture-helper" \
   "$SERVICE_HELPER"
 
-# CI/development signing only. Release builds will use Developer ID + notarization.
 codesign --force --sign - "$APP/Contents/Resources/linkvideo-capture-helper"
 codesign --force --sign - "$SERVICE_HELPER"
 if file "$FFMPEG_TARGET" | grep -q 'Mach-O'; then
