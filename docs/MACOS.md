@@ -14,6 +14,7 @@ Windows продолжает использовать `*_windows.go`, DXGI/GDI, 
 - получение реального списка дисплеев;
 - выбор конкретного дисплея по `SCDisplayID`;
 - ScreenCaptureKit -> BGRA -> существующий `captureSupervisor`;
+- системный звук через ScreenCaptureKit -> stereo 48 kHz S16LE -> существующий общий audio bridge/FFmpeg mix;
 - общий FFmpeg/RTSP/RTMP pipeline;
 - аппаратный H.264/H.265 через Apple VideoToolbox (`h264_videotoolbox` / `hevc_videotoolbox`);
 - общий realtime-probe и автоматический fallback с VideoToolbox на программный x264/x265, если аппаратный encoder недоступен;
@@ -23,6 +24,12 @@ Windows продолжает использовать `*_windows.go`, DXGI/GDI, 
 - отдельный `update-manifest-macos.json`;
 - `.app`, ZIP и development DMG;
 - минимальная система: macOS 13 Ventura.
+
+## Системный звук
+
+На Windows общий audio bridge получает PCM из WASAPI Loopback. На macOS тот же bridge вызывает отдельный режим ScreenCaptureKit helper (`--capture-audio`). Helper просит ScreenCaptureKit выдавать 48 kHz stereo, преобразует системный Float32 PCM в interleaved signed 16-bit little-endian и пишет его в существующий локальный TCP audio channel.
+
+Это сохраняет общую FFmpeg-схему: системный звук и будущий микрофон микшируются уже в общем Go/FFmpeg pipeline, а платформенная часть отвечает только за получение PCM.
 
 ## FFmpeg в development-сборке
 
@@ -41,13 +48,13 @@ Launcher ищет FFmpeg в таком порядке:
 brew install ffmpeg
 ```
 
-После этого можно открыть `LinkVideo.Monitor.app` из development DMG. При первом обращении к экрану macOS должна запросить разрешение Screen Recording. Доступность VideoToolbox дополнительно проверяется самим FFmpeg перед запуском потока; при ошибке общий механизм выбора кодировщика использует software fallback.
+После этого можно открыть `LinkVideo.Monitor.app` из development DMG. При первом обращении к экрану или системному звуку macOS должна запросить разрешение Screen Recording. Доступность VideoToolbox дополнительно проверяется самим FFmpeg перед запуском потока; при ошибке общий механизм выбора кодировщика использует software fallback.
 
 ## Ограничения текущего этапа
 
 - режим одного выбранного дисплея уже сопоставляется с настоящим Mac-дисплеем;
 - полноценная композиция нескольких дисплеев в режиме «все экраны» ещё не реализована;
-- системный звук и микрофон ещё не перенесены;
+- системный звук перенесён, микрофон ещё не перенесён;
 - публичный релиз ещё не подписан Developer ID и не notarized;
 - development FFmpeg launcher не является финальным способом поставки FFmpeg.
 
