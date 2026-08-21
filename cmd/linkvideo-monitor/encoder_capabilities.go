@@ -32,6 +32,10 @@ func isHardwareEncoder(name string) bool {
 }
 
 func encoderCandidatesForCodec(codec string) []encoderOption {
+	if platform := platformHardwareEncoderCandidates(codec); len(platform) > 0 {
+		software := softwareEncoderForCodec(codec)
+		return append(platform, encoderOption{Name: software, Label: encoderLabel(software)})
+	}
 	if codec == "h265" {
 		return []encoderOption{
 			{Name: "libx265", Label: encoderLabel("libx265")},
@@ -51,6 +55,8 @@ func encoderCandidatesForCodec(codec string) []encoderOption {
 func adapterMatchesEncoder(adapterNames, encoder string) bool {
 	names := strings.ToLower(adapterNames)
 	switch {
+	case strings.HasSuffix(encoder, "_videotoolbox"):
+		return true
 	case strings.HasSuffix(encoder, "_qsv"):
 		return strings.Contains(names, "intel")
 	case strings.HasSuffix(encoder, "_nvenc"):

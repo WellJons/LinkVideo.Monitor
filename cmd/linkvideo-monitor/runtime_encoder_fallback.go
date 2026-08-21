@@ -143,6 +143,8 @@ func benchmarkEncoderRealtime(cfg Config, plan capturePlan, encoder string, cand
 			rc = "cbr"
 		}
 		args = append(args, "-usage", "lowlatency", "-quality", "balanced", "-rc", rc, "-bf", "0")
+	case "h264_videotoolbox", "hevc_videotoolbox":
+		args = append(args, "-realtime", "1", "-allow_sw", "0", "-prio_speed", "1", "-bf", "0")
 	case "libx264", "libx265":
 		preset := strings.TrimSpace(candidate.Preset)
 		if preset == "" {
@@ -232,6 +234,8 @@ func h264FallbackEncoderName(h265Encoder string) string {
 		return "h264_qsv"
 	case "hevc_amf":
 		return "h264_amf"
+	case "hevc_videotoolbox":
+		return "h264_videotoolbox"
 	default:
 		return ""
 	}
