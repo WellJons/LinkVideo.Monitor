@@ -7,6 +7,7 @@ APP="$BUILD/LinkVideo.Monitor.app"
 SERVICE_APP="$APP/Contents/Library/LoginItems/LinkVideoServiceHelper.app"
 SERVICE_HELPER="$SERVICE_APP/Contents/MacOS/LinkVideoServiceHelper"
 SERVICE_BUNDLE_ID="ru.linkvideo.monitor.service-helper"
+WORKSPACE_HELPER="$APP/Contents/Resources/linkvideo-workspace-helper"
 VERSION="${MACOS_VERSION:-0.1.0-dev}"
 BUNDLE_VERSION="${VERSION%%[-+]*}"
 BUILD_NUMBER="${MACOS_BUILD_NUMBER:-1}"
@@ -43,6 +44,13 @@ for arch in arm64 x86_64; do
     -framework AudioToolbox \
     -o "$BUILD/linkvideo-capture-helper-$arch"
 
+  echo "==> Workspace wake helper $arch"
+  xcrun swiftc -O -whole-module-optimization \
+    -target "$arch-apple-macos13.0" \
+    "$ROOT/native/macos/workspace/main.swift" \
+    -framework AppKit \
+    -o "$BUILD/linkvideo-workspace-helper-$arch"
+
   echo "==> Login item launcher $arch"
   xcrun swiftc -O -whole-module-optimization \
     -target "$arch-apple-macos13.0" \
@@ -59,6 +67,11 @@ lipo -create \
   "$BUILD/linkvideo-capture-helper-arm64" \
   "$BUILD/linkvideo-capture-helper-x86_64" \
   -output "$APP/Contents/Resources/linkvideo-capture-helper"
+
+lipo -create \
+  "$BUILD/linkvideo-workspace-helper-arm64" \
+  "$BUILD/linkvideo-workspace-helper-x86_64" \
+  -output "$WORKSPACE_HELPER"
 
 lipo -create \
   "$BUILD/LinkVideoServiceHelper-arm64" \
@@ -110,10 +123,12 @@ chmod +x \
   "$APP/Contents/MacOS/LinkVideo.Monitor" \
   "$APP/Contents/MacOS/ffmpeg.exe" \
   "$APP/Contents/Resources/linkvideo-capture-helper" \
+  "$WORKSPACE_HELPER" \
   "$SERVICE_HELPER"
 
 # CI/development signing only. Release builds will use Developer ID + notarization.
 codesign --force --sign - "$APP/Contents/Resources/linkvideo-capture-helper"
+codesign --force --sign - "$WORKSPACE_HELPER"
 codesign --force --sign - "$SERVICE_HELPER"
 codesign --force --deep --sign - "$SERVICE_APP"
 if file "$FFMPEG_TARGET" | grep -q 'Mach-O'; then
@@ -125,10 +140,12 @@ codesign --verify --deep --strict "$APP"
 
 app_archs="$(lipo -archs "$APP/Contents/MacOS/LinkVideo.Monitor")"
 capture_archs="$(lipo -archs "$APP/Contents/Resources/linkvideo-capture-helper")"
+workspace_archs="$(lipo -archs "$WORKSPACE_HELPER")"
 service_archs="$(lipo -archs "$SERVICE_HELPER")"
 for required in arm64 x86_64; do
   [[ " $app_archs " == *" $required "* ]] || { echo "Main app misses $required" >&2; exit 1; }
   [[ " $capture_archs " == *" $required "* ]] || { echo "Capture helper misses $required" >&2; exit 1; }
+  [[ " $workspace_archs " == *" $required "* ]] || { echo "Workspace helper misses $required" >&2; exit 1; }
   [[ " $service_archs " == *" $required "* ]] || { echo "Login item misses $required" >&2; exit 1; }
 done
 
@@ -154,5 +171,6 @@ echo "Release version: $VERSION"
 echo "Bundle version: $BUNDLE_VERSION ($BUILD_NUMBER)"
 echo "App architectures: $app_archs"
 echo "Capture helper architectures: $capture_archs"
+echo "Workspace helper architectures: $workspace_archs"
 echo "Login item architectures: $service_archs"
 echo "Autostart login item status: $startup_status"
