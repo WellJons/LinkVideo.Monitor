@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os/exec"
 	"strconv"
 )
@@ -21,7 +22,7 @@ type macOSDisplayInfo struct {
 	Primary      bool    `json:"primary"`
 }
 
-func listMonitors() ([]Monitor, error) {
+func macOSDisplayInfos() ([]macOSDisplayInfo, error) {
 	helper, err := macOSCaptureHelperPath()
 	if err != nil {
 		return nil, err
@@ -37,10 +38,27 @@ func listMonitors() ([]Monitor, error) {
 	if len(displays) == 0 {
 		return nil, fmt.Errorf("macOS не вернула доступные дисплеи")
 	}
+	return displays, nil
+}
+
+func listMonitors() ([]Monitor, error) {
+	displays, err := macOSDisplayInfos()
+	if err != nil {
+		return nil, err
+	}
 
 	monitors := make([]Monitor, 0, len(displays))
+	multiDisplay := len(displays) > 1
 	for i, display := range displays {
+		// ScreenCaptureKit exposes the global desktop frame in points. On a
+		// multi-display Mac keep X/Y/Width/Height in that single coordinate
+		// system; mixing point origins with physical Retina pixels makes desktop
+		// bounds overlap or gap. A one-display Mac keeps the previous native
+		// pixel dimensions so existing Retina capture quality does not regress.
 		width, height := display.WidthPixels, display.HeightPixels
+		if multiDisplay {
+			width, height = display.WidthPoints, display.HeightPoints
+		}
 		if width < 2 || height < 2 {
 			width, height = display.WidthPoints, display.HeightPoints
 		}
@@ -53,8 +71,8 @@ func listMonitors() ([]Monitor, error) {
 			DisplayNumber: i + 1,
 			Name:          name,
 			DeviceID:      strconv.FormatUint(uint64(display.ID), 10),
-			X:             int(display.X),
-			Y:             int(display.Y),
+			X:             int(math.Round(display.X)),
+			Y:             int(math.Round(display.Y)),
 			Width:         even(width),
 			Height:        even(height),
 			Primary:       display.Primary,
