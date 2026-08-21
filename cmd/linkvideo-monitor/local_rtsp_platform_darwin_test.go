@@ -25,7 +25,7 @@ func TestDarwinMediaMTXDefaultPathUsesAppMacOSDirectory(t *testing.T) {
 
 func TestDarwinMediaMTXUsesModernConfig(t *testing.T) {
 	release := selectedMediaMTXRelease()
-	if release.Version != "1.19.3" || release.LegacyConfig {
+	if release.Version != macOSMediaMTXVersion || release.LegacyConfig {
 		t.Fatalf("unexpected Darwin MediaMTX release: %+v", release)
 	}
 }
