@@ -29,7 +29,9 @@
    - [x] macOS recording overlay and placement
    - [x] System audio and microphone settings retained
    - [x] Privacy protection backed by macOS Accessibility geometry and shared sensitive-field rules
+   - [x] `linkvideomonitor:` deep links routed through a native macOS URL handler into the shared parser
    - [ ] Physical-Mac Accessibility permission + browser password/card/OTP validation
+   - [ ] Physical-Mac browser/site deep-link validation
    - [ ] Final audit of every Windows-visible setting for macOS support/wording
 
 4. **Видеокодеки и проверки**
