@@ -178,11 +178,13 @@ exit 127
 EOF
 fi
 
-# Keep MediaMTX platform-specific as well. Production builds should pass a
-# signed Universal MEDIAMTX_BINARY. Development builds discover Homebrew/PATH.
+# macOS ships a verified Universal MediaMTX by default so a fresh install does
+# not depend on Homebrew/PATH. Release engineering can still provide an exact
+# prebuilt binary through MEDIAMTX_BINARY. MACOS_USE_SYSTEM_MEDIAMTX=1 keeps a
+# development-only launcher for offline/local experiments.
 if [[ -n "${MEDIAMTX_BINARY:-}" ]]; then
   cp "$MEDIAMTX_BINARY" "$MEDIAMTX_TARGET"
-else
+elif [[ "${MACOS_USE_SYSTEM_MEDIAMTX:-0}" == "1" ]]; then
   cat > "$MEDIAMTX_TARGET" <<'EOF'
 #!/bin/bash
 set -e
@@ -190,23 +192,19 @@ set -e
 if [[ -n "${LINKVIDEO_MEDIAMTX:-}" && -x "${LINKVIDEO_MEDIAMTX}" ]]; then
   exec "${LINKVIDEO_MEDIAMTX}" "$@"
 fi
-
 for candidate in /opt/homebrew/bin/mediamtx /usr/local/bin/mediamtx; do
   if [[ -x "$candidate" ]]; then
     exec "$candidate" "$@"
   fi
 done
-
 if command -v mediamtx >/dev/null 2>&1; then
-  resolved="$(command -v mediamtx)"
-  if [[ "$resolved" != "$0" ]]; then
-    exec "$resolved" "$@"
-  fi
+  exec "$(command -v mediamtx)" "$@"
 fi
-
-echo "LinkVideo Monitor: MediaMTX не найден. Для development-сборки установите: brew install mediamtx" >&2
+echo "LinkVideo Monitor: MediaMTX не найден" >&2
 exit 127
 EOF
+else
+  /bin/bash "$ROOT/scripts/macos/fetch-mediamtx.sh" "$MEDIAMTX_TARGET"
 fi
 
 chmod +x \
@@ -247,6 +245,10 @@ overlay_archs="$(lipo -archs "$OVERLAY_HELPER")"
 hotkey_archs="$(lipo -archs "$HOTKEY_HELPER")"
 service_archs="$(lipo -archs "$SERVICE_HELPER")"
 url_archs="$(lipo -archs "$URL_HELPER")"
+mediamtx_archs=""
+if file "$MEDIAMTX_TARGET" | grep -q 'Mach-O'; then
+  mediamtx_archs="$(lipo -archs "$MEDIAMTX_TARGET")"
+fi
 for required in arm64 x86_64; do
   [[ " $app_archs " == *" $required "* ]] || { echo "Main app misses $required" >&2; exit 1; }
   [[ " $capture_archs " == *" $required "* ]] || { echo "Capture helper misses $required" >&2; exit 1; }
@@ -255,6 +257,9 @@ for required in arm64 x86_64; do
   [[ " $hotkey_archs " == *" $required "* ]] || { echo "Hotkey helper misses $required" >&2; exit 1; }
   [[ " $service_archs " == *" $required "* ]] || { echo "Login item misses $required" >&2; exit 1; }
   [[ " $url_archs " == *" $required "* ]] || { echo "URL handler misses $required" >&2; exit 1; }
+  if [[ -n "$mediamtx_archs" ]]; then
+    [[ " $mediamtx_archs " == *" $required "* ]] || { echo "MediaMTX misses $required" >&2; exit 1; }
+  fi
 done
 
 # Probe the ServiceManagement bridge from the actual main executable. Ad-hoc
