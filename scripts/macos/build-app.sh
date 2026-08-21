@@ -4,15 +4,21 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BUILD="$ROOT/build/macos"
 APP="$BUILD/LinkVideo.Monitor.app"
+SERVICE_APP="$APP/Contents/Resources/LinkVideoServiceHelper.app"
+SERVICE_HELPER="$SERVICE_APP/Contents/MacOS/LinkVideoServiceHelper"
+AGENT_PLIST="$SERVICE_APP/Contents/Library/LaunchAgents/ru.linkvideo.monitor.autostart.plist"
 VERSION="${MACOS_VERSION:-0.1.0-dev}"
 BUNDLE_VERSION="${VERSION%%[-+]*}"
 BUILD_NUMBER="${MACOS_BUILD_NUMBER:-1}"
 FFMPEG_TARGET="$APP/Contents/MacOS/ffmpeg.exe"
-SERVICE_HELPER="$APP/Contents/MacOS/linkvideo-service-helper"
-AGENT_PLIST="$APP/Contents/Library/LaunchAgents/ru.linkvideo.monitor.autostart.plist"
 
 rm -rf "$BUILD"
-mkdir -p "$BUILD" "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Library/LaunchAgents"
+mkdir -p \
+  "$BUILD" \
+  "$APP/Contents/MacOS" \
+  "$APP/Contents/Resources" \
+  "$SERVICE_APP/Contents/MacOS" \
+  "$SERVICE_APP/Contents/Library/LaunchAgents"
 
 for arch in arm64 x86_64; do
   goarch="$arch"
@@ -38,12 +44,12 @@ for arch in arm64 x86_64; do
     -framework AudioToolbox \
     -o "$BUILD/linkvideo-capture-helper-$arch"
 
-  echo "==> ServiceManagement helper $arch"
+  echo "==> ServiceManagement helper app $arch"
   xcrun swiftc -O -whole-module-optimization \
     -target "$arch-apple-macos13.0" \
     "$ROOT/native/macos/servicemanagement/main.swift" \
     -framework ServiceManagement \
-    -o "$BUILD/linkvideo-service-helper-$arch"
+    -o "$BUILD/LinkVideoServiceHelper-$arch"
 done
 
 lipo -create \
@@ -57,14 +63,19 @@ lipo -create \
   -output "$APP/Contents/Resources/linkvideo-capture-helper"
 
 lipo -create \
-  "$BUILD/linkvideo-service-helper-arm64" \
-  "$BUILD/linkvideo-service-helper-x86_64" \
+  "$BUILD/LinkVideoServiceHelper-arm64" \
+  "$BUILD/LinkVideoServiceHelper-x86_64" \
   -output "$SERVICE_HELPER"
 
 cp "$ROOT/packaging/macos/Info.plist" "$APP/Contents/Info.plist"
+cp "$ROOT/packaging/macos/ServiceHelper-Info.plist" "$SERVICE_APP/Contents/Info.plist"
 cp "$ROOT/packaging/macos/ru.linkvideo.monitor.autostart.plist" "$AGENT_PLIST"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $BUNDLE_VERSION" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $BUNDLE_VERSION" "$SERVICE_APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$SERVICE_APP/Contents/Info.plist"
+plutil -lint "$APP/Contents/Info.plist" >/dev/null
+plutil -lint "$SERVICE_APP/Contents/Info.plist" >/dev/null
 plutil -lint "$AGENT_PLIST" >/dev/null
 
 if [[ -n "${FFMPEG_BINARY:-}" ]]; then
@@ -99,8 +110,10 @@ chmod +x \
   "$APP/Contents/Resources/linkvideo-capture-helper" \
   "$SERVICE_HELPER"
 
+# CI/development signing only. Release builds will use Developer ID + notarization.
 codesign --force --sign - "$APP/Contents/Resources/linkvideo-capture-helper"
 codesign --force --sign - "$SERVICE_HELPER"
+codesign --force --deep --sign - "$SERVICE_APP"
 if file "$FFMPEG_TARGET" | grep -q 'Mach-O'; then
   codesign --force --sign - "$FFMPEG_TARGET"
 fi
