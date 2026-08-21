@@ -1,0 +1,68 @@
+name: macOS CI
+
+on:
+  push:
+    branches:
+      - feature/macos-port
+    paths:
+      - 'cmd/linkvideo-monitor/**'
+      - 'native/macos/**'
+      - 'packaging/macos/**'
+      - 'scripts/macos/**'
+      - '.github/workflows/macos-ci.yml'
+      - 'go.mod'
+      - 'go.work'
+  pull_request:
+    paths:
+      - 'cmd/linkvideo-monitor/**'
+      - 'native/macos/**'
+      - 'packaging/macos/**'
+      - 'scripts/macos/**'
+      - '.github/workflows/macos-ci.yml'
+      - 'go.mod'
+      - 'go.work'
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.20.x'
+          cache: false
+      - name: Toolchain info
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+          go version
+      - name: Test existing Monitor package on macOS
+        run: go test ./cmd/linkvideo-monitor
+      - name: Build Universal macOS app
+        run: scripts/macos/build-app.sh
+      - name: Verify app bundle
+        run: |
+          set -euo pipefail
+          APP='build/macos/LinkVideo.Monitor.app'
+          test -x "$APP/Contents/MacOS/LinkVideo.Monitor"
+          test -x "$APP/Contents/Resources/linkvideo-capture-helper"
+          plutil -lint "$APP/Contents/Info.plist"
+          lipo -archs "$APP/Contents/MacOS/LinkVideo.Monitor" | grep -q arm64
+          lipo -archs "$APP/Contents/MacOS/LinkVideo.Monitor" | grep -q x86_64
+          lipo -archs "$APP/Contents/Resources/linkvideo-capture-helper" | grep -q arm64
+          lipo -archs "$APP/Contents/Resources/linkvideo-capture-helper" | grep -q x86_64
+          codesign --verify --deep --strict "$APP"
+      - name: Package app artifact
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent \
+            build/macos/LinkVideo.Monitor.app \
+            build/macos/LinkVideo.Monitor_macOS_0.1.0-dev.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LinkVideo-Monitor-macOS-0.1.0-dev
+          path: build/macos/LinkVideo.Monitor_macOS_0.1.0-dev.zip
+          if-no-files-found: error
