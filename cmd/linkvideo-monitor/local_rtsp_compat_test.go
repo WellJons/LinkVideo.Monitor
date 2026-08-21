@@ -10,6 +10,9 @@ func TestMediaMTXReleaseForWindows7(t *testing.T) {
 	if release.Version != "1.0.3" || !release.LegacyConfig {
 		t.Fatalf("unexpected Windows 7 MediaMTX release: %+v", release)
 	}
+	if !strings.Contains(release.URL, "windows_amd64.zip") || len(release.SHA256) != 64 {
+		t.Fatalf("Windows 7 MediaMTX artifact metadata is incomplete: %+v", release)
+	}
 }
 
 func TestMediaMTXReleaseForModernWindows(t *testing.T) {
@@ -17,6 +20,9 @@ func TestMediaMTXReleaseForModernWindows(t *testing.T) {
 		release := mediaMTXReleaseForWindows(version[0], version[1])
 		if release.Version != "1.19.3" || release.LegacyConfig {
 			t.Fatalf("unexpected modern MediaMTX release for %d.%d: %+v", version[0], version[1], release)
+		}
+		if !strings.Contains(release.URL, "windows_amd64.zip") || len(release.SHA256) != 64 {
+			t.Fatalf("modern Windows MediaMTX artifact metadata is incomplete: %+v", release)
 		}
 	}
 }
