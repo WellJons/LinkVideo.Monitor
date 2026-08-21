@@ -4,6 +4,7 @@
 #import <ApplicationServices/ApplicationServices.h>
 #import <Foundation/Foundation.h>
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -83,7 +84,7 @@ static char *lv_copy_string_list_attribute(AXUIElementRef element, CFStringRef a
     for (CFIndex i = 0; i < count; i++) {
         CFTypeRef item = CFArrayGetValueAtIndex(array, i);
         if (item != NULL && CFGetTypeID(item) == CFStringGetTypeID()) {
-            [parts addObject:(__bridge NSString *)item];
+            [parts addObject:(NSString *)item];
         }
     }
     NSString *joined = [parts componentsJoinedByString:@" "];
@@ -273,8 +274,7 @@ static int lv_fill_sample(AXUIElementRef element, LVPrivacySample *out) {
 
     out->role = lv_copy_string_attribute(element, kAXRoleAttribute);
     out->subrole = lv_copy_string_attribute(element, kAXSubroleAttribute);
-    out->secure = out->subrole != NULL &&
-                  strcmp(out->subrole, [(__bridge NSString *)kAXSecureTextFieldSubrole UTF8String]) == 0;
+    out->secure = out->subrole != NULL && strcmp(out->subrole, "AXSecureTextField") == 0;
 
     Boolean valueSettable = false;
     AXError settableError = AXUIElementIsAttributeSettable(element, kAXValueAttribute, &valueSettable);
