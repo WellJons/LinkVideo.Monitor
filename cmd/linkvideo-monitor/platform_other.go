@@ -2,10 +2,7 @@
 
 package main
 
-import (
-	"errors"
-	"io"
-)
+import "errors"
 
 func syncStartupRegistration(enabled bool) error     { return nil }
 func syncURLProtocolRegistration() error             { return nil }
@@ -22,9 +19,6 @@ func runOverlay(startedUnix int64, x, y int) error {
 }
 func placeOverlayInteractive(x, y int) (OverlayPosition, error) {
 	return OverlayPosition{}, errors.New("перемещение индикатора поддерживается только в Windows")
-}
-func runWASAPILoopback(out io.Writer) error {
-	return errors.New("WASAPI Loopback поддерживается только в Windows")
 }
 func runUninstaller()                  {}
 func runUninstallWorker(parentPID int) {}
