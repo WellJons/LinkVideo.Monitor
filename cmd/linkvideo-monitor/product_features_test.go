@@ -116,7 +116,7 @@ func TestProtectedConfigChangesMatchRequestedPolicy(t *testing.T) {
 func TestSelectivePasswordUIWording(t *testing.T) {
 	for _, want := range []string{
 		"hasProtectedChanges()",
-		"Изменение настроек видео, автозапуска Windows и отключение индикатора",
+		"Изменение настроек видео, автозапуска программы и отключение индикатора",
 		"passwordInput.value=''",
 	} {
 		if !strings.Contains(indexHTML, want) {
@@ -248,7 +248,7 @@ func TestBusinessProductUIControls(t *testing.T) {
 		`restoreProtectedFields`,
 		`Скопировать журнал`,
 		`История переподключений`,
-		`Изменение настроек видео, автозапуска Windows и отключение индикатора`,
+		`Изменение настроек видео, автозапуска программы и отключение индикатора`,
 		`Закрепите IP-адрес этого компьютера`,
 		`соединение закрыто сервером`,
 		`Сервер '+server+' доступен`,
