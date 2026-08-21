@@ -7,6 +7,9 @@ APP="$BUILD/LinkVideo.Monitor.app"
 SERVICE_APP="$APP/Contents/Library/LoginItems/LinkVideoServiceHelper.app"
 SERVICE_HELPER="$SERVICE_APP/Contents/MacOS/LinkVideoServiceHelper"
 SERVICE_BUNDLE_ID="ru.linkvideo.monitor.service-helper"
+URL_APP="$APP/Contents/Library/Helpers/LinkVideoURLHandler.app"
+URL_HELPER="$URL_APP/Contents/MacOS/LinkVideoURLHandler"
+URL_BUNDLE_ID="ru.linkvideo.monitor.url-handler"
 WORKSPACE_HELPER="$APP/Contents/Resources/linkvideo-workspace-helper"
 OVERLAY_HELPER="$APP/Contents/Resources/linkvideo-overlay-helper"
 HOTKEY_HELPER="$APP/Contents/Resources/linkvideo-hotkey-helper"
@@ -21,7 +24,8 @@ mkdir -p \
   "$BUILD" \
   "$APP/Contents/MacOS" \
   "$APP/Contents/Resources" \
-  "$SERVICE_APP/Contents/MacOS"
+  "$SERVICE_APP/Contents/MacOS" \
+  "$URL_APP/Contents/MacOS"
 
 for arch in arm64 x86_64; do
   goarch="$arch"
@@ -75,6 +79,13 @@ for arch in arm64 x86_64; do
     -target "$arch-apple-macos13.0" \
     "$ROOT/native/macos/servicemanagement/main.swift" \
     -o "$BUILD/LinkVideoServiceHelper-$arch"
+
+  echo "==> URL protocol handler $arch"
+  xcrun swiftc -O -whole-module-optimization \
+    -target "$arch-apple-macos13.0" \
+    "$ROOT/native/macos/urlhandler/main.swift" \
+    -framework AppKit \
+    -o "$BUILD/LinkVideoURLHandler-$arch"
 done
 
 lipo -create \
@@ -107,18 +118,37 @@ lipo -create \
   "$BUILD/LinkVideoServiceHelper-x86_64" \
   -output "$SERVICE_HELPER"
 
+lipo -create \
+  "$BUILD/LinkVideoURLHandler-arm64" \
+  "$BUILD/LinkVideoURLHandler-x86_64" \
+  -output "$URL_HELPER"
+
 cp "$ROOT/packaging/macos/Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/packaging/macos/ServiceHelper-Info.plist" "$SERVICE_APP/Contents/Info.plist"
+cp "$ROOT/packaging/macos/URLHandler-Info.plist" "$URL_APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $BUNDLE_VERSION" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $BUNDLE_VERSION" "$SERVICE_APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$SERVICE_APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $BUNDLE_VERSION" "$URL_APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$URL_APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist" >/dev/null
 plutil -lint "$SERVICE_APP/Contents/Info.plist" >/dev/null
+plutil -lint "$URL_APP/Contents/Info.plist" >/dev/null
 
 actual_service_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$SERVICE_APP/Contents/Info.plist")"
 if [[ "$actual_service_id" != "$SERVICE_BUNDLE_ID" ]]; then
   echo "Login item bundle id mismatch: $actual_service_id" >&2
+  exit 1
+fi
+actual_url_id="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$URL_APP/Contents/Info.plist")"
+if [[ "$actual_url_id" != "$URL_BUNDLE_ID" ]]; then
+  echo "URL handler bundle id mismatch: $actual_url_id" >&2
+  exit 1
+fi
+actual_url_scheme="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:0:CFBundleURLSchemes:0' "$URL_APP/Contents/Info.plist")"
+if [[ "$actual_url_scheme" != "linkvideomonitor" ]]; then
+  echo "URL handler scheme mismatch: $actual_url_scheme" >&2
   exit 1
 fi
 
@@ -187,7 +217,8 @@ chmod +x \
   "$WORKSPACE_HELPER" \
   "$OVERLAY_HELPER" \
   "$HOTKEY_HELPER" \
-  "$SERVICE_HELPER"
+  "$SERVICE_HELPER" \
+  "$URL_HELPER"
 
 # CI/development signing only. Release builds will use Developer ID + notarization.
 codesign --force --sign - "$APP/Contents/Resources/linkvideo-capture-helper"
@@ -196,6 +227,8 @@ codesign --force --sign - "$OVERLAY_HELPER"
 codesign --force --sign - "$HOTKEY_HELPER"
 codesign --force --sign - "$SERVICE_HELPER"
 codesign --force --deep --sign - "$SERVICE_APP"
+codesign --force --sign - "$URL_HELPER"
+codesign --force --deep --sign - "$URL_APP"
 if file "$FFMPEG_TARGET" | grep -q 'Mach-O'; then
   codesign --force --sign - "$FFMPEG_TARGET"
 fi
@@ -204,6 +237,7 @@ if file "$MEDIAMTX_TARGET" | grep -q 'Mach-O'; then
 fi
 codesign --force --deep --sign - "$APP"
 codesign --verify --deep --strict "$SERVICE_APP"
+codesign --verify --deep --strict "$URL_APP"
 codesign --verify --deep --strict "$APP"
 
 app_archs="$(lipo -archs "$APP/Contents/MacOS/LinkVideo.Monitor")"
@@ -212,6 +246,7 @@ workspace_archs="$(lipo -archs "$WORKSPACE_HELPER")"
 overlay_archs="$(lipo -archs "$OVERLAY_HELPER")"
 hotkey_archs="$(lipo -archs "$HOTKEY_HELPER")"
 service_archs="$(lipo -archs "$SERVICE_HELPER")"
+url_archs="$(lipo -archs "$URL_HELPER")"
 for required in arm64 x86_64; do
   [[ " $app_archs " == *" $required "* ]] || { echo "Main app misses $required" >&2; exit 1; }
   [[ " $capture_archs " == *" $required "* ]] || { echo "Capture helper misses $required" >&2; exit 1; }
@@ -219,6 +254,7 @@ for required in arm64 x86_64; do
   [[ " $overlay_archs " == *" $required "* ]] || { echo "Overlay helper misses $required" >&2; exit 1; }
   [[ " $hotkey_archs " == *" $required "* ]] || { echo "Hotkey helper misses $required" >&2; exit 1; }
   [[ " $service_archs " == *" $required "* ]] || { echo "Login item misses $required" >&2; exit 1; }
+  [[ " $url_archs " == *" $required "* ]] || { echo "URL handler misses $required" >&2; exit 1; }
 done
 
 # Probe the ServiceManagement bridge from the actual main executable. Ad-hoc
@@ -238,6 +274,12 @@ if [[ "$startup_status" == "not-found" ]]; then
   echo "Ad-hoc development build: ServiceManagement status is not-found; production signing will re-check registration"
 fi
 
+url_handler_status="$("$APP/Contents/MacOS/LinkVideo.Monitor" --url-handler-status)"
+if [[ "$url_handler_status" != "$URL_BUNDLE_ID" ]]; then
+  echo "Launch Services URL handler mismatch: $url_handler_status" >&2
+  exit 1
+fi
+
 echo "Built: $APP"
 echo "Release version: $VERSION"
 echo "Bundle version: $BUNDLE_VERSION ($BUILD_NUMBER)"
@@ -247,4 +289,6 @@ echo "Workspace helper architectures: $workspace_archs"
 echo "Overlay helper architectures: $overlay_archs"
 echo "Hotkey helper architectures: $hotkey_archs"
 echo "Login item architectures: $service_archs"
+echo "URL handler architectures: $url_archs"
 echo "Autostart login item status: $startup_status"
+echo "URL protocol handler: $url_handler_status"
