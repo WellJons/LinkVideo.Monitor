@@ -11,11 +11,13 @@ import (
 	"strings"
 )
 
+const macOSMediaMTXVersion = "1.20.0"
+
 func selectedMediaMTXRelease() mediaMTXRelease {
-	// The modern configuration schema is platform-independent. The development
-	// app currently supplies MediaMTX through its bundled launcher; production
-	// packaging will replace that launcher with a signed Universal binary.
-	return mediaMTXCurrentRelease
+	// Keep the macOS release line independent from the Windows managed runtime.
+	// The app bundle contains this verified Universal build, while Windows keeps
+	// its separately tested mediaMTXCurrentRelease version and download policy.
+	return mediaMTXRelease{Version: macOSMediaMTXVersion}
 }
 
 func isManagedMediaMTXPath(value string) bool {
@@ -48,8 +50,8 @@ func ensureManagedMediaMTX(a *app, release mediaMTXRelease) (string, error) {
 		return "", err
 	}
 	if resolved, lookErr := exec.LookPath("mediamtx"); lookErr == nil {
-		a.appendLog("Встроенный MediaMTX launcher не найден; используется mediamtx из PATH")
+		a.appendLog("Встроенный MediaMTX не найден; используется mediamtx из PATH")
 		return resolved, nil
 	}
-	return "", fmt.Errorf("MediaMTX %s для macOS не найден; development-сборка ожидает встроенный launcher или установленный mediamtx", release.Version)
+	return "", fmt.Errorf("встроенный MediaMTX %s для macOS не найден", release.Version)
 }
