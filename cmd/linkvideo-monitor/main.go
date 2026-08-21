@@ -2085,18 +2085,15 @@ func (a *app) routes() http.Handler {
 		wasRunning := a.running
 		a.mu.Unlock()
 		a.stopOverlay()
-		// Завершаем возможные зависшие копии индикатора от ранних beta-версий.
-		killOverlay := exec.Command("taskkill.exe", "/IM", "LinkVideo.ScreenOverlay.exe", "/T", "/F")
-		hideChildWindow(killOverlay)
-		_ = killOverlay.Run()
-		time.Sleep(180 * time.Millisecond)
-		exe, err := helperExecutable("LinkVideo.ScreenOverlay.exe")
+		cleanupLegacyOverlayProcesses()
+		cmd, err := overlayPlacementCommand(x, y)
 		if err != nil {
+			if wasRunning {
+				a.setOverlayStatus(true, "")
+			}
 			writeJSON(w, 500, map[string]string{"error": err.Error()})
 			return
 		}
-		cmd := exec.Command(exe, "--place-overlay", strconv.Itoa(x), strconv.Itoa(y))
-		hideChildWindow(cmd)
 		out, err := cmd.Output()
 		if err != nil {
 			if wasRunning {

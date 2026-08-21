@@ -3,8 +3,6 @@ package main
 import (
 	"encoding/json"
 	"os"
-	"os/exec"
-	"strconv"
 	"sync"
 	"time"
 )
@@ -70,12 +68,11 @@ func (a *app) setOverlayStatus(active bool, _ string) {
 	if plan, err := resolveCapturePlan(cfg); err == nil && plan.Mode == "monitor" {
 		x, y = overlayPositionForCaptureMonitor(x, y, plan.X, plan.Y, plan.Width, plan.Height, 214, 36)
 	}
-	exe, err := helperExecutable("LinkVideo.ScreenOverlay.exe")
+	cmd, err := recordingOverlayCommand(started.Unix(), x, y)
 	if err != nil {
+		a.appendLog("Индикатор записи: " + err.Error())
 		return
 	}
-	cmd := exec.Command(exe, "--overlay", strconv.FormatInt(started.Unix(), 10), strconv.Itoa(x), strconv.Itoa(y))
-	hideChildWindow(cmd)
 	if err := cmd.Start(); err != nil {
 		a.appendLog("Индикатор записи: " + err.Error())
 		a.scheduleOverlayRetry()
