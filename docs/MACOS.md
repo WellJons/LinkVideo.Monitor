@@ -51,11 +51,11 @@ Windows по-прежнему использует существующий FFmp
 
 На macOS историческое поле конфигурации `launch_with_windows` сохраняется ради совместимости с существующим API и настройками, но фактически управляет запуском программы при входе пользователя в систему.
 
-В основном bundle находится фоновое login-item приложение `Contents/Library/LoginItems/LinkVideoServiceHelper.app`. Оно является `LSUIElement`, не показывает собственное окно и управляет своей регистрацией через `SMAppService.mainApp`, доступный в macOS 13+.
+В основном bundle находится фоновое login-item приложение `Contents/Library/LoginItems/LinkVideoServiceHelper.app`. Оно является `LSUIElement`, не показывает собственное окно и при запуске открывает основной `Contents/MacOS/LinkVideo.Monitor` с аргументом `--background`, после чего завершается.
 
-При входе пользователя login item запускает основной `Contents/MacOS/LinkVideo.Monitor` с аргументом `--background` и завершается. Поэтому автозапуск не открывает страницу настроек в браузере и не создаёт вторую постоянно работающую копию Monitor.
+Регистрацией login item управляет непосредственно главный процесс LinkVideo Monitor через macOS-only Objective-C bridge к `SMAppService.loginItem(identifier:)`. Это важно: ServiceManagement ищет helper в `Contents/Library/LoginItems` именно относительно calling application. Windows и Linux этот bridge не компилируют.
 
-ServiceManagement отображает этот компонент в системных Login Items / Allow in Background. Если macOS требует пользовательского разрешения, статус будет `requires-approval`; настройку можно разрешить в System Settings. Legacy LaunchAgent и ручное копирование plist в `~/Library/LaunchAgents` не используются.
+ServiceManagement отображает компонент в системных Login Items / Allow in Background. Если macOS требует пользовательского разрешения, статус будет `requires-approval`; настройку можно разрешить в System Settings. Legacy LaunchAgent и ручное копирование plist в `~/Library/LaunchAgents` не используются.
 
 ## FFmpeg в development-сборке
 
