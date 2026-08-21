@@ -210,7 +210,7 @@ func (t *macOSPrivacyTracker) refreshTracked() {
 			C.lv_privacy_release(C.uintptr_t(item.handle))
 			continue
 		}
-		if rectDistance(item.rect, rect) <= 3 {
+		if macOSPrivacyRectDistance(item.rect, rect) <= 3 {
 			rect = item.rect
 		}
 		item.rect = rect
@@ -231,10 +231,10 @@ func (t *macOSPrivacyTracker) remember(handle uintptr, signature string, rect pr
 
 	for i := range t.elements {
 		item := &t.elements[i]
-		if item.signature != signature || rectDistance(item.rect, rect) > 24 {
+		if item.signature != signature || macOSPrivacyRectDistance(item.rect, rect) > 24 {
 			continue
 		}
-		if rectDistance(item.rect, rect) <= 3 {
+		if macOSPrivacyRectDistance(item.rect, rect) <= 3 {
 			rect = item.rect
 		}
 		adopted := false
@@ -318,4 +318,25 @@ func (t *macOSPrivacyTracker) captureRect(x, y, width, height float64) (privacyS
 		Right:  int(math.Ceil(x + width + expand)),
 		Bottom: int(math.Ceil(y + height + expand)),
 	}, true
+}
+
+func macOSPrivacyRectDistance(a, b privacyScreenRect) int {
+	distance := macOSPrivacyAbs(a.Left - b.Left)
+	if value := macOSPrivacyAbs(a.Top - b.Top); value > distance {
+		distance = value
+	}
+	if value := macOSPrivacyAbs(a.Right - b.Right); value > distance {
+		distance = value
+	}
+	if value := macOSPrivacyAbs(a.Bottom - b.Bottom); value > distance {
+		distance = value
+	}
+	return distance
+}
+
+func macOSPrivacyAbs(value int) int {
+	if value < 0 {
+		return -value
+	}
+	return value
 }
