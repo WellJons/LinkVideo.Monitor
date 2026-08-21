@@ -70,6 +70,17 @@ func TestMacOSCompositeFrameWaitsForEveryDisplay(t *testing.T) {
 	}
 }
 
+func TestMacOSCompositeFrameRejectsOutOfBoundsTile(t *testing.T) {
+	stream := &macOSCaptureStream{
+		tile:   macOSCaptureTile{DisplayID: 1, X: 3, Y: 0, Width: 2, Height: 2},
+		latest: solidBGRAFrame(2, 2, 0x33),
+		ready:  true,
+	}
+	if macOSCompositeFrame(make([]byte, 4*2*4), 4, 2, []*macOSCaptureStream{stream}) {
+		t.Fatal("out-of-bounds tile must be rejected instead of copied")
+	}
+}
+
 func TestMacOSRawFrameSizeRejectsExcessiveCanvas(t *testing.T) {
 	if _, err := macOSRawFrameSize(40000, 40000); err == nil {
 		t.Fatal("expected oversized canvas to be rejected")
