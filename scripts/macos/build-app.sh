@@ -12,6 +12,7 @@ VERSION="${MACOS_VERSION:-0.1.0-dev}"
 BUNDLE_VERSION="${VERSION%%[-+]*}"
 BUILD_NUMBER="${MACOS_BUILD_NUMBER:-1}"
 FFMPEG_TARGET="$APP/Contents/MacOS/ffmpeg.exe"
+MEDIAMTX_TARGET="$APP/Contents/MacOS/mediamtx"
 
 rm -rf "$BUILD"
 mkdir -p \
@@ -119,9 +120,41 @@ exit 127
 EOF
 fi
 
+# Keep MediaMTX platform-specific as well. Production builds should pass a
+# signed Universal MEDIAMTX_BINARY. Development builds discover Homebrew/PATH.
+if [[ -n "${MEDIAMTX_BINARY:-}" ]]; then
+  cp "$MEDIAMTX_BINARY" "$MEDIAMTX_TARGET"
+else
+  cat > "$MEDIAMTX_TARGET" <<'EOF'
+#!/bin/bash
+set -e
+
+if [[ -n "${LINKVIDEO_MEDIAMTX:-}" && -x "${LINKVIDEO_MEDIAMTX}" ]]; then
+  exec "${LINKVIDEO_MEDIAMTX}" "$@"
+fi
+
+for candidate in /opt/homebrew/bin/mediamtx /usr/local/bin/mediamtx; do
+  if [[ -x "$candidate" ]]; then
+    exec "$candidate" "$@"
+  fi
+done
+
+if command -v mediamtx >/dev/null 2>&1; then
+  resolved="$(command -v mediamtx)"
+  if [[ "$resolved" != "$0" ]]; then
+    exec "$resolved" "$@"
+  fi
+fi
+
+echo "LinkVideo Monitor: MediaMTX не найден. Для development-сборки установите: brew install mediamtx" >&2
+exit 127
+EOF
+fi
+
 chmod +x \
   "$APP/Contents/MacOS/LinkVideo.Monitor" \
   "$APP/Contents/MacOS/ffmpeg.exe" \
+  "$MEDIAMTX_TARGET" \
   "$APP/Contents/Resources/linkvideo-capture-helper" \
   "$WORKSPACE_HELPER" \
   "$SERVICE_HELPER"
@@ -133,6 +166,9 @@ codesign --force --sign - "$SERVICE_HELPER"
 codesign --force --deep --sign - "$SERVICE_APP"
 if file "$FFMPEG_TARGET" | grep -q 'Mach-O'; then
   codesign --force --sign - "$FFMPEG_TARGET"
+fi
+if file "$MEDIAMTX_TARGET" | grep -q 'Mach-O'; then
+  codesign --force --sign - "$MEDIAMTX_TARGET"
 fi
 codesign --force --deep --sign - "$APP"
 codesign --verify --deep --strict "$SERVICE_APP"

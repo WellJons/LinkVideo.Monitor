@@ -50,7 +50,9 @@ jobs:
           APP='build/macos/LinkVideo.Monitor.app'
           test -x "$APP/Contents/MacOS/LinkVideo.Monitor"
           test -x "$APP/Contents/MacOS/ffmpeg.exe"
+          test -x "$APP/Contents/MacOS/mediamtx"
           test -x "$APP/Contents/Resources/linkvideo-capture-helper"
+          test -x "$APP/Contents/Resources/linkvideo-workspace-helper"
           plutil -lint "$APP/Contents/Info.plist"
           test "$(/usr/libexec/PlistBuddy -c 'Print :LSMinimumSystemVersion' "$APP/Contents/Info.plist")" = '13.0'
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")" = '0.1.0'
@@ -58,6 +60,8 @@ jobs:
           lipo -archs "$APP/Contents/MacOS/LinkVideo.Monitor" | grep -q x86_64
           lipo -archs "$APP/Contents/Resources/linkvideo-capture-helper" | grep -q arm64
           lipo -archs "$APP/Contents/Resources/linkvideo-capture-helper" | grep -q x86_64
+          lipo -archs "$APP/Contents/Resources/linkvideo-workspace-helper" | grep -q arm64
+          lipo -archs "$APP/Contents/Resources/linkvideo-workspace-helper" | grep -q x86_64
           codesign --verify --deep --strict "$APP"
       - name: Package ZIP and DMG artifacts
         run: |
