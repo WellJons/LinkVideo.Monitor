@@ -27,9 +27,19 @@ typedef struct {
     char *aria_props;
 } LVPrivacySample;
 
+typedef struct {
+    int valid;
+    int enabled;
+    int offscreen;
+    double x;
+    double y;
+    double width;
+    double height;
+} LVPrivacyGeometry;
+
 int lv_privacy_is_trusted(int prompt);
 int lv_privacy_copy_focused(LVPrivacySample *out);
-int lv_privacy_refresh(uintptr_t handle, LVPrivacySample *out);
+int lv_privacy_refresh(uintptr_t handle, LVPrivacyGeometry *out);
 void lv_privacy_release(uintptr_t handle);
 void lv_privacy_free_sample(LVPrivacySample *sample);
 
