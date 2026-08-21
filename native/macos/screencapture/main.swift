@@ -350,7 +350,6 @@ func captureMicrophone(args: [String]) throws {
 
     let session = AVCaptureSession()
     session.beginConfiguration()
-    defer { session.commitConfiguration() }
 
     let input: AVCaptureDeviceInput
     do {
