@@ -2,56 +2,38 @@
 
 package main
 
+/*
+#cgo LDFLAGS: -framework Foundation -framework ServiceManagement
+#include <stdlib.h>
+
+char *lv_sync_startup(int enabled);
+char *lv_startup_status_name(void);
+*/
+import "C"
+
 import (
-	"bytes"
-	"errors"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
+	"unsafe"
 )
 
 func syncStartupRegistration(enabled bool) error {
-	helper, err := macOSServiceHelperPath()
-	if err != nil {
-		return err
+	value := C.int(0)
+	if enabled {
+		value = 1
 	}
-	cmd := exec.Command(helper, macOSStartupHelperArgs(enabled)...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		detail := strings.TrimSpace(stderr.String())
-		if detail != "" {
-			return fmt.Errorf("ServiceManagement: %s", detail)
-		}
-		return fmt.Errorf("ServiceManagement: %w", err)
+	message := C.lv_sync_startup(value)
+	if message == nil {
+		return nil
 	}
-	return nil
+	defer C.free(unsafe.Pointer(message))
+	return fmt.Errorf("ServiceManagement: %s", C.GoString(message))
 }
 
-func macOSStartupHelperArgs(enabled bool) []string {
-	return []string{"--set-startup", fmt.Sprint(enabled)}
-}
-
-func macOSServiceHelperPath() (string, error) {
-	if value := strings.TrimSpace(os.Getenv("LINKVIDEO_SERVICE_HELPER")); value != "" {
-		return value, nil
+func startupRegistrationStatus() (string, error) {
+	value := C.lv_startup_status_name()
+	if value == nil {
+		return "", fmt.Errorf("ServiceManagement не вернул статус login item")
 	}
-	if exe, err := os.Executable(); err == nil && exe != "" {
-		base := filepath.Dir(exe)
-		candidates := []string{
-			filepath.Clean(filepath.Join(base, "..", "Library", "LoginItems", "LinkVideoServiceHelper.app", "Contents", "MacOS", "LinkVideoServiceHelper")),
-			filepath.Join(base, "linkvideo-service-helper"),
-		}
-		for _, candidate := range candidates {
-			if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
-				return candidate, nil
-			}
-		}
-	}
-	if path, err := exec.LookPath("LinkVideoServiceHelper"); err == nil {
-		return path, nil
-	}
-	return "", errors.New("не найден macOS ServiceManagement helper")
+	defer C.free(unsafe.Pointer(value))
+	return C.GoString(value), nil
 }
