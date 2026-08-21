@@ -206,6 +206,22 @@ static int register_hotkey(const char *label, ParsedHotkey spec, UInt32 id, Even
     return 1;
 }
 
+static int run_event_loop(void) {
+    for (;;) {
+        EventRef event = NULL;
+        OSStatus status = ReceiveNextEvent(0, NULL, kEventDurationForever, true, &event);
+        if (status != noErr) {
+            if (event) ReleaseEvent(event);
+            fprintf(stderr, "Ошибка цикла горячих клавиш: OSStatus %d\n", (int)status);
+            return 5;
+        }
+        if (event) {
+            SendEventToEventTarget(event, GetApplicationEventTarget());
+            ReleaseEvent(event);
+        }
+    }
+}
+
 int main(int argc, char **argv) {
     const char *toggleRaw = argument_value(argc, argv, "--toggle");
     const char *pttRaw = argument_value(argc, argv, "--ptt");
@@ -247,10 +263,10 @@ int main(int argc, char **argv) {
         return 4;
     }
 
-    RunApplicationEventLoop();
+    int result = run_event_loop();
 
     if (toggleRef) UnregisterEventHotKey(toggleRef);
     if (pttRef) UnregisterEventHotKey(pttRef);
     if (handler) RemoveEventHandler(handler);
-    return 0;
+    return result;
 }
