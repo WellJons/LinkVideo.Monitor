@@ -136,6 +136,7 @@ func parseVersion(v string) (parsedVersion, error) {
 			if item == "" {
 				return parsedVersion{}, errors.New("пустой prerelease-компонент")
 			}
+		}
 	}
 	parts := strings.Split(v, ".")
 	if len(parts) == 0 {
