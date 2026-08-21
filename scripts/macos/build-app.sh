@@ -24,8 +24,8 @@ for arch in arm64 x86_64; do
     goarch="amd64"
   fi
 
-  echo "==> Go app $arch (GOARCH=$goarch, version=$VERSION)"
-  CGO_ENABLED=0 GOOS=darwin GOARCH="$goarch" \
+  echo "==> Go app $arch (GOARCH=$goarch, version=$VERSION, CGO=1)"
+  CGO_ENABLED=1 GOOS=darwin GOARCH="$goarch" \
     go build -trimpath \
       -ldflags="-s -w -X main.platformBuildVersion=$VERSION" \
       -o "$BUILD/LinkVideo.Monitor-$arch" "$ROOT/cmd/linkvideo-monitor"
@@ -42,11 +42,10 @@ for arch in arm64 x86_64; do
     -framework AudioToolbox \
     -o "$BUILD/linkvideo-capture-helper-$arch"
 
-  echo "==> ServiceManagement login item $arch"
+  echo "==> Login item launcher $arch"
   xcrun swiftc -O -whole-module-optimization \
     -target "$arch-apple-macos13.0" \
     "$ROOT/native/macos/servicemanagement/main.swift" \
-    -framework ServiceManagement \
     -o "$BUILD/LinkVideoServiceHelper-$arch"
 done
 
@@ -115,9 +114,12 @@ if file "$FFMPEG_TARGET" | grep -q 'Mach-O'; then
 fi
 codesign --force --deep --sign - "$APP"
 
-startup_status="$($SERVICE_HELPER --startup-status)"
+# Probe ServiceManagement from the actual main application process. This is
+# important: loginItemServiceWithIdentifier resolves helpers relative to the
+# calling app's Contents/Library/LoginItems directory.
+startup_status="$("$APP/Contents/MacOS/LinkVideo.Monitor" --startup-status)"
 if [[ "$startup_status" == "not-found" || "$startup_status" == "unknown" ]]; then
-  echo "ServiceManagement cannot resolve login item app: $startup_status" >&2
+  echo "ServiceManagement cannot resolve login item app from LinkVideo Monitor: $startup_status" >&2
   exit 1
 fi
 
@@ -126,5 +128,5 @@ echo "Release version: $VERSION"
 echo "Bundle version: $BUNDLE_VERSION ($BUILD_NUMBER)"
 echo "App architectures: $(lipo -archs "$APP/Contents/MacOS/LinkVideo.Monitor")"
 echo "Capture helper architectures: $(lipo -archs "$APP/Contents/Resources/linkvideo-capture-helper")"
-echo "Service helper architectures: $(lipo -archs "$SERVICE_HELPER")"
+echo "Login item architectures: $(lipo -archs "$SERVICE_HELPER")"
 echo "Autostart login item status: $startup_status"
