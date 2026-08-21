@@ -42,6 +42,13 @@ jobs:
           go version
       - name: Test existing Monitor package on macOS
         run: go test ./cmd/linkvideo-monitor
+      - name: Check macOS packaging scripts
+        run: |
+          bash -n scripts/macos/build-app.sh
+          bash -n scripts/macos/package-pkg.sh
+          bash -n scripts/macos/package-dmg.sh
+          bash -n 'packaging/macos/Uninstall LinkVideo Monitor.command'
+          bash -n packaging/macos/pkg-scripts/preinstall
       - name: Build Universal macOS app
         run: scripts/macos/build-app.sh
       - name: Verify app bundle
@@ -72,17 +79,27 @@ jobs:
             echo 'Invalid hotkey was unexpectedly accepted' >&2
             exit 1
           fi
+          startup_disable_status="$("$APP/Contents/MacOS/LinkVideo.Monitor" --set-startup false)"
+          case "$startup_disable_status" in
+            not-registered|not-found) ;;
+            *) echo "Unexpected startup status after disable: $startup_disable_status" >&2; exit 1 ;;
+          esac
           codesign --verify --deep --strict "$APP"
-      - name: Package ZIP and DMG artifacts
+      - name: Package ZIP, PKG and DMG artifacts
         run: |
           ditto -c -k --sequesterRsrc --keepParent \
             build/macos/LinkVideo.Monitor.app \
             build/macos/LinkVideo.Monitor_macOS_0.1.0-dev.zip
+          bash scripts/macos/package-pkg.sh
           bash scripts/macos/package-dmg.sh
+          test -f build/macos/LinkVideo.Monitor_macOS_0.1.0-dev.pkg
+          pkgutil --payload-files build/macos/LinkVideo.Monitor_macOS_0.1.0-dev.pkg | grep -q 'Applications/LinkVideo.Monitor.app'
+          pkgutil --payload-files build/macos/LinkVideo.Monitor_macOS_0.1.0-dev.pkg | grep -q 'Applications/Uninstall LinkVideo Monitor.command'
       - uses: actions/upload-artifact@v4
         with:
           name: LinkVideo-Monitor-macOS-0.1.0-dev
           path: |
             build/macos/LinkVideo.Monitor_macOS_0.1.0-dev.zip
+            build/macos/LinkVideo.Monitor_macOS_0.1.0-dev.pkg
             build/macos/LinkVideo.Monitor_macOS_0.1.0-dev.dmg
           if-no-files-found: error

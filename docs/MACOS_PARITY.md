@@ -5,11 +5,14 @@
 ## Обязательные функциональные блоки
 
 1. **Установка и удаление**
-   - [x] Development `.app`, ZIP и DMG packaging
+   - [x] Development `.app`, ZIP and DMG packaging
+   - [x] Development `.pkg` installer to `/Applications`
+   - [x] macOS uninstall command with ServiceManagement cleanup
+   - [x] Uninstall preserves settings/logs by default and supports explicit `--purge-data`
    - [x] macOS ServiceManagement autostart/login item
-   - [ ] Production Developer ID signing
+   - [ ] Production Developer ID Application/Installer signing
    - [ ] Apple notarization
-   - [ ] Production installer/uninstaller UX and cleanup verification
+   - [ ] Physical-Mac installer/upgrade/uninstaller validation
 
 2. **Трансляция потока**
    - [x] ScreenCaptureKit display capture
@@ -54,7 +57,7 @@
 - [x] System audio capture
 - [x] Microphone capture
 - [x] Microphone mute/voice/PTT shared runtime logic
-- [ ] Global macOS PTT/mute hotkeys (PR in progress)
+- [x] Global macOS PTT/mute hotkeys
 - [x] Native recording overlay
 - [x] Sleep prevention / keep display on
 - [x] Platform-specific update manifest and update capability reporting
