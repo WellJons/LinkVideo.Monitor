@@ -39,3 +39,12 @@ func TestPlatformBuildVersionOverride(t *testing.T) {
 		t.Fatalf("currentReleaseVersion()=%q", got)
 	}
 }
+
+func TestReportedAppVersionMatchesReleaseIdentityAtStartup(t *testing.T) {
+	// appVersion is initialized once at package startup. This assertion protects
+	// all existing outward surfaces (status, remote identity, RTSP User-Agent)
+	// without duplicating platform checks at each call site.
+	if appVersion != currentReleaseVersion() {
+		t.Fatalf("appVersion=%q currentReleaseVersion=%q", appVersion, currentReleaseVersion())
+	}
+}
