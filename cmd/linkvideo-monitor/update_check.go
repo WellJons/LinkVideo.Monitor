@@ -8,28 +8,32 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// Public update manifest. It may still be overridden for special builds with:
-// -ldflags="-X main.defaultUpdateManifestURL=https://.../update-manifest.json"
-// The application never needs a GitHub token: only release binaries and this
-// small manifest are published in the public LinkVideo.Monitor.Updates repo.
-var defaultUpdateManifestURL = "https://raw.githubusercontent.com/WellJons/LinkVideo.Monitor.Updates/main/update-manifest.json"
+// Optional build-time override for special channels:
+// -ldflags="-X main.defaultUpdateManifestURL=https://.../manifest.json"
+// When empty, each OS uses its own official manifest.
+var defaultUpdateManifestURL string
 
 type updateManifest struct {
-	Version     string `json:"version"`
-	DownloadURL string `json:"download_url"`
-	SHA256      string `json:"sha256,omitempty"`
-	Notes       string `json:"notes,omitempty"`
-	Mandatory   bool   `json:"mandatory,omitempty"`
+	Version       string   `json:"version"`
+	Platform      string   `json:"platform,omitempty"`
+	Architectures []string `json:"architectures,omitempty"`
+	DownloadURL   string   `json:"download_url"`
+	SHA256        string   `json:"sha256,omitempty"`
+	Notes         string   `json:"notes,omitempty"`
+	Mandatory     bool     `json:"mandatory,omitempty"`
 }
 
 type updateCheckResult struct {
 	CurrentVersion string `json:"current_version"`
 	LatestVersion  string `json:"latest_version"`
+	Platform       string `json:"platform"`
+	Architecture   string `json:"architecture"`
 	Available      bool   `json:"available"`
 	DownloadURL    string `json:"download_url,omitempty"`
 	SHA256         string `json:"sha256,omitempty"`
@@ -45,12 +49,16 @@ type parsedVersion struct {
 func checkForUpdates(ctx context.Context) (updateCheckResult, error) {
 	manifestURL := strings.TrimSpace(defaultUpdateManifestURL)
 	if manifestURL == "" {
-		return updateCheckResult{}, errors.New("сервер обновлений пока не настроен")
+		manifestURL = defaultUpdateManifestForPlatform(runtime.GOOS)
+	}
+	if manifestURL == "" {
+		return updateCheckResult{}, errors.New("сервер обновлений для этой платформы пока не настроен")
 	}
 	u, err := url.Parse(manifestURL)
 	if err != nil || u.Scheme != "https" || u.Host == "" {
 		return updateCheckResult{}, errors.New("задан некорректный адрес сервера обновлений")
 	}
+	currentVersion := currentReleaseVersion()
 	reqCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, u.String(), nil)
@@ -58,7 +66,7 @@ func checkForUpdates(ctx context.Context) (updateCheckResult, error) {
 		return updateCheckResult{}, err
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "LinkVideo-Monitor/"+appVersion)
+	req.Header.Set("User-Agent", fmt.Sprintf("LinkVideo-Monitor/%s (%s/%s)", currentVersion, runtime.GOOS, runtime.GOARCH))
 	req.Header.Set("Cache-Control", "no-cache")
 	req.Header.Set("Pragma", "no-cache")
 	resp, err := http.DefaultClient.Do(req)
@@ -76,7 +84,13 @@ func checkForUpdates(ctx context.Context) (updateCheckResult, error) {
 	if strings.TrimSpace(m.Version) == "" {
 		return updateCheckResult{}, errors.New("сервер не указал версию обновления")
 	}
-	cmp, err := compareSemanticVersions(m.Version, appVersion)
+	if platform := strings.TrimSpace(strings.ToLower(m.Platform)); platform != "" && platform != runtime.GOOS {
+		return updateCheckResult{}, fmt.Errorf("манифест предназначен для %s, а клиент работает на %s", platform, runtime.GOOS)
+	}
+	if !architectureAllowed(m.Architectures, runtime.GOARCH) {
+		return updateCheckResult{}, fmt.Errorf("обновление %s не поддерживает архитектуру %s", m.Version, runtime.GOARCH)
+	}
+	cmp, err := compareSemanticVersions(m.Version, currentVersion)
 	if err != nil {
 		return updateCheckResult{}, fmt.Errorf("сервер указал некорректную версию обновления: %w", err)
 	}
@@ -87,9 +101,15 @@ func checkForUpdates(ctx context.Context) (updateCheckResult, error) {
 		}
 	}
 	return updateCheckResult{
-		CurrentVersion: appVersion, LatestVersion: m.Version,
-		Available:   cmp > 0,
-		DownloadURL: m.DownloadURL, SHA256: m.SHA256, Notes: m.Notes, Mandatory: m.Mandatory,
+		CurrentVersion: currentVersion,
+		LatestVersion:  m.Version,
+		Platform:       runtime.GOOS,
+		Architecture:   runtime.GOARCH,
+		Available:      cmp > 0,
+		DownloadURL:    m.DownloadURL,
+		SHA256:         m.SHA256,
+		Notes:          m.Notes,
+		Mandatory:      m.Mandatory,
 	}, nil
 }
 
