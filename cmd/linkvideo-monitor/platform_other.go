@@ -4,8 +4,7 @@ package main
 
 import "errors"
 
-func syncURLProtocolRegistration() error { return nil }
-func lowerProcessPriority(pid int)       {}
+func lowerProcessPriority(pid int) {}
 func listWindows() ([]WindowInfo, error) {
 	return nil, errors.New("выбор окна поддерживается только в Windows")
 }
