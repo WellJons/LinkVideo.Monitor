@@ -1,5 +1,6 @@
 //go:build darwin
 
+#import <AppKit/AppKit.h>
 #import <CoreServices/CoreServices.h>
 #import <Foundation/Foundation.h>
 
@@ -42,12 +43,19 @@ char *lv_register_url_handler(void) {
 
 char *lv_url_handler_status(void) {
     @autoreleasepool {
-        CFStringRef value = LSCopyDefaultHandlerForURLScheme(lvURLScheme);
-        if (value == NULL) {
+        NSURL *probeURL = [NSURL URLWithString:@"linkvideomonitor://status"];
+        if (probeURL == nil) {
             return NULL;
         }
-        NSString *handler = [(__bridge NSString *)value copy];
-        CFRelease(value);
-        return handler.length > 0 ? strdup(handler.UTF8String) : NULL;
+        NSURL *applicationURL = [NSWorkspace.sharedWorkspace URLForApplicationToOpenURL:probeURL];
+        if (applicationURL == nil) {
+            return NULL;
+        }
+        NSBundle *bundle = [NSBundle bundleWithURL:applicationURL];
+        NSString *handler = bundle.bundleIdentifier;
+        if (handler.length == 0) {
+            return NULL;
+        }
+        return strdup(handler.UTF8String);
     }
 }
