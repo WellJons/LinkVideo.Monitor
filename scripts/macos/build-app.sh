@@ -33,6 +33,7 @@ for arch in arm64 x86_64; do
     -framework CoreMedia \
     -framework CoreVideo \
     -framework AVFoundation \
+    -framework AudioToolbox \
     -o "$BUILD/linkvideo-capture-helper-$arch"
 done
 
