@@ -28,6 +28,8 @@
    - [x] macOS autostart implementation
    - [x] macOS recording overlay and placement
    - [x] System audio and microphone settings retained
+   - [x] Privacy protection backed by macOS Accessibility geometry and shared sensitive-field rules
+   - [ ] Physical-Mac Accessibility permission + browser password/card/OTP validation
    - [ ] Final audit of every Windows-visible setting for macOS support/wording
 
 4. **Видеокодеки и проверки**
