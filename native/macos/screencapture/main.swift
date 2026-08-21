@@ -291,10 +291,23 @@ func captureAudio() throws {
     try startStream(stream, output: output)
 }
 
+func microphoneDiscoveryTypes() -> [AVCaptureDevice.DeviceType] {
+    if #available(macOS 14.0, *) {
+        return [.microphone]
+    }
+    // Ventura's DiscoverySession predates the generic `.microphone` type.
+    // Raw values avoid referencing symbols that newer SDKs mark deprecated,
+    // while preserving the device types Apple documented for macOS 13.
+    return [
+        AVCaptureDevice.DeviceType(rawValue: "AVCaptureDeviceTypeBuiltInMicrophone"),
+        AVCaptureDevice.DeviceType(rawValue: "AVCaptureDeviceTypeExternalUnknown"),
+    ]
+}
+
 func availableMicrophones() -> [AVCaptureDevice] {
     let defaultID = AVCaptureDevice.default(for: .audio)?.uniqueID
     let discovery = AVCaptureDevice.DiscoverySession(
-        deviceTypes: [.microphone],
+        deviceTypes: microphoneDiscoveryTypes(),
         mediaType: .audio,
         position: .unspecified
     )
