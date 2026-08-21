@@ -245,7 +245,10 @@ func macOSCompositeFrame(canvas []byte, outputWidth, outputHeight int, streams [
 	}
 	for _, stream := range streams {
 		stream.mu.Lock()
-		ready := stream.ready && len(stream.latest) == stream.tile.Width*stream.tile.Height*4
+		tile := stream.tile
+		validBounds := tile.X >= 0 && tile.Y >= 0 && tile.Width > 0 && tile.Height > 0 &&
+			tile.X+tile.Width <= outputWidth && tile.Y+tile.Height <= outputHeight
+		ready := validBounds && stream.ready && len(stream.latest) == tile.Width*tile.Height*4
 		stream.mu.Unlock()
 		if !ready {
 			return false
