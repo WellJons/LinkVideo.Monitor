@@ -11,6 +11,8 @@ PKG="$BUILD/LinkVideo.Monitor_macOS_${VERSION}.pkg"
 PAYLOAD="$BUILD/pkg-root"
 SCRIPTS="$BUILD/pkg-scripts"
 UNINSTALL_NAME="Uninstall LinkVideo Monitor.command"
+PREINSTALL="$ROOT/packaging/macos/pkg-scripts/preinstall"
+POSTINSTALL="$ROOT/packaging/macos/pkg-scripts/postinstall"
 
 if [[ ! -d "$APP" ]]; then
   echo "Application bundle not found: $APP" >&2
@@ -18,13 +20,17 @@ if [[ ! -d "$APP" ]]; then
   exit 1
 fi
 
+bash -n "$PREINSTALL"
+bash -n "$POSTINSTALL"
+
 rm -rf "$PAYLOAD" "$SCRIPTS" "$PKG"
 mkdir -p "$PAYLOAD/Applications" "$SCRIPTS"
 
 ditto "$APP" "$PAYLOAD/Applications/LinkVideo.Monitor.app"
 cp "$ROOT/packaging/macos/$UNINSTALL_NAME" "$PAYLOAD/Applications/$UNINSTALL_NAME"
-cp "$ROOT/packaging/macos/pkg-scripts/preinstall" "$SCRIPTS/preinstall"
-chmod 755 "$PAYLOAD/Applications/$UNINSTALL_NAME" "$SCRIPTS/preinstall"
+cp "$PREINSTALL" "$SCRIPTS/preinstall"
+cp "$POSTINSTALL" "$SCRIPTS/postinstall"
+chmod 755 "$PAYLOAD/Applications/$UNINSTALL_NAME" "$SCRIPTS/preinstall" "$SCRIPTS/postinstall"
 
 pkg_args=(
   --root "$PAYLOAD"
@@ -46,6 +52,7 @@ rm -rf "$EXPANDED"
 pkgutil --expand "$PKG" "$EXPANDED"
 test -f "$EXPANDED/PackageInfo"
 test -f "$EXPANDED/Scripts/preinstall"
+test -f "$EXPANDED/Scripts/postinstall"
 grep -q "identifier=\"$PACKAGE_ID\"" "$EXPANDED/PackageInfo"
 grep -q "version=\"$BUNDLE_VERSION\"" "$EXPANDED/PackageInfo"
 rm -rf "$EXPANDED" "$PAYLOAD" "$SCRIPTS"
