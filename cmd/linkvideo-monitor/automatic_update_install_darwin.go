@@ -24,6 +24,7 @@ pkg="$tmpdir/update.pkg"
 /bin/chmod 600 "$pkg"
 
 app="/Applications/LinkVideo.Monitor.app"
+/usr/bin/codesign --verify --deep --strict "$app"
 app_details="$(/usr/bin/codesign -dv --verbose=4 "$app" 2>&1)"
 app_team="$(/usr/bin/printf '%s\n' "$app_details" | /usr/bin/sed -n 's/^TeamIdentifier=//p' | /usr/bin/head -n 1)"
 app_authority="$(/usr/bin/printf '%s\n' "$app_details" | /usr/bin/sed -n 's/^Authority=\(Developer ID Application:.*\)$/\1/p' | /usr/bin/head -n 1)"
