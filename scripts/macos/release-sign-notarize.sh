@@ -55,13 +55,13 @@ check_toolchain() {
   require_tool security
   require_tool ditto
   require_tool pkgutil
+  require_tool pkgbuild
   require_tool spctl
   require_tool hdiutil
   require_tool xcrun
 
-  xcrun notarytool --help >/dev/null 2>&1 || fail "xcrun notarytool is unavailable"
-  xcrun stapler --help >/dev/null 2>&1 || fail "xcrun stapler is unavailable"
-  xcrun pkgbuild --help >/dev/null 2>&1 || fail "pkgbuild is unavailable"
+  xcrun -f notarytool >/dev/null 2>&1 || fail "xcrun notarytool is unavailable"
+  xcrun -f stapler >/dev/null 2>&1 || fail "xcrun stapler is unavailable"
 
   bash -n "$ROOT/scripts/macos/build-app.sh"
   bash -n "$ROOT/scripts/macos/build-bundled-app.sh"
