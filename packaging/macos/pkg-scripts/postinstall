@@ -1,0 +1,28 @@
+#!/bin/bash
+set -u
+
+APP="/Applications/LinkVideo.Monitor.app"
+RELAUNCH_MARKER="/var/tmp/ru.linkvideo.monitor.relaunch"
+
+if [[ ! -f "$RELAUNCH_MARKER" ]]; then
+  exit 0
+fi
+
+console_user="$(/usr/bin/sed -n '1p' "$RELAUNCH_MARKER" 2>/dev/null || true)"
+console_uid="$(/usr/bin/sed -n '2p' "$RELAUNCH_MARKER" 2>/dev/null || true)"
+/bin/rm -f "$RELAUNCH_MARKER"
+
+case "$console_uid" in
+  ''|*[!0-9]*) exit 0 ;;
+esac
+if [[ -z "$console_user" || "$console_user" == "root" || "$console_user" == "loginwindow" ]]; then
+  exit 0
+fi
+
+# Run `open` in the active user's bootstrap/session and as that user. Failure to
+# relaunch must not roll back an otherwise successful package installation.
+/bin/launchctl asuser "$console_uid" \
+  /usr/bin/sudo -u "$console_user" \
+  /usr/bin/open -gja "$APP" --args --background >/dev/null 2>&1 || true
+
+exit 0
