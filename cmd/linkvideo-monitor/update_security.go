@@ -23,6 +23,14 @@ func updateAssetVersionBase(v string) string {
 }
 
 func validateAutomaticUpdateDownload(downloadURL, sha256sum, targetVersion string) error {
+	expectedName := strings.TrimSpace(expectedAutomaticUpdateAssetName(targetVersion))
+	if expectedName == "" {
+		return errors.New("автоматическая установка обновлений не поддерживается на этой платформе")
+	}
+	return validateAutomaticUpdateDownloadForAsset(downloadURL, sha256sum, targetVersion, expectedName)
+}
+
+func validateAutomaticUpdateDownloadForAsset(downloadURL, sha256sum, targetVersion, expectedName string) error {
 	u, err := url.Parse(strings.TrimSpace(downloadURL))
 	if err != nil || u.Scheme != "https" || !strings.EqualFold(u.Hostname(), "github.com") {
 		return errors.New("автоматическое обновление разрешено только через GitHub LinkVideo.Monitor.Updates")
@@ -46,8 +54,7 @@ func validateAutomaticUpdateDownload(downloadURL, sha256sum, targetVersion strin
 	if err != nil {
 		return errors.New("некорректное имя установщика обновления")
 	}
-	expectedName := "linkvideo.monitor_" + updateAssetVersionBase(targetVersion) + "_setup.exe"
-	if strings.ToLower(fileName) != expectedName {
+	if !strings.EqualFold(fileName, strings.TrimSpace(expectedName)) {
 		return errors.New("имя установщика не соответствует версии манифеста")
 	}
 	digest, err := hex.DecodeString(strings.TrimSpace(sha256sum))
