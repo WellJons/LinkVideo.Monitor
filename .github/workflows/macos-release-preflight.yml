@@ -11,6 +11,7 @@ on:
       - 'scripts/macos/package-pkg.sh'
       - 'scripts/macos/package-dmg.sh'
       - 'docs/MACOS_RELEASE.md'
+      - '.github/workflows/macos-production-release.yml'
       - '.github/workflows/macos-release-preflight.yml'
   pull_request:
     paths:
@@ -20,6 +21,7 @@ on:
       - 'scripts/macos/package-pkg.sh'
       - 'scripts/macos/package-dmg.sh'
       - 'docs/MACOS_RELEASE.md'
+      - '.github/workflows/macos-production-release.yml'
       - '.github/workflows/macos-release-preflight.yml'
 
 permissions:
@@ -39,6 +41,14 @@ jobs:
         run: |
           bash -n scripts/macos/release-sign-notarize.sh
           bash scripts/macos/release-sign-notarize.sh --check
+      - name: Validate production workflow structure
+        run: |
+          ruby -e 'require "yaml"; YAML.safe_load(File.read(ARGV[0]), aliases: true)' .github/workflows/macos-production-release.yml
+          grep -q 'workflow_dispatch:' .github/workflows/macos-production-release.yml
+          grep -q 'scripts/macos/release-sign-notarize.sh' .github/workflows/macos-production-release.yml
+          grep -q 'update-manifest-macos.json' .github/workflows/macos-production-release.yml
+          grep -q 'MACOS_APP_CERT_P12_BASE64' .github/workflows/macos-production-release.yml
+          grep -q 'UPDATES_REPO_TOKEN' .github/workflows/macos-production-release.yml
       - name: Verify fail-closed credential handling
         run: |
           set -euo pipefail
