@@ -3,26 +3,41 @@ set -u
 
 APP="/Applications/LinkVideo.Monitor.app"
 BIN="$APP/Contents/MacOS/LinkVideo.Monitor"
+RELAUNCH_MARKER="/var/tmp/ru.linkvideo.monitor.relaunch"
 
-terminate_tree() {
-  local pid="$1"
-  local child
-  for child in $(/usr/bin/pgrep -P "$pid" 2>/dev/null || true); do
-    terminate_tree "$child"
-  done
-  /bin/kill -TERM "$pid" 2>/dev/null || true
+processes_matching() {
+  local needle="$1"
+  /bin/ps -axo pid=,command= | /usr/bin/awk -v needle="$needle" 'index($0, needle) > 0 {print $1}'
 }
 
-pids="$(/usr/bin/pgrep -f "$BIN" 2>/dev/null || true)"
-for pid in $pids; do
-  terminate_tree "$pid"
+# Never inherit a marker from a previous interrupted package installation.
+/bin/rm -f "$RELAUNCH_MARKER"
+
+main_pids="$(processes_matching "$BIN" 2>/dev/null || true)"
+if [[ -n "$main_pids" ]]; then
+  console_user="$(/usr/bin/stat -f '%Su' /dev/console 2>/dev/null || true)"
+  if [[ -n "$console_user" && "$console_user" != "root" && "$console_user" != "loginwindow" ]]; then
+    console_uid="$(/usr/bin/id -u "$console_user" 2>/dev/null || true)"
+    if [[ -n "$console_uid" ]]; then
+      /usr/bin/printf '%s\n%s\n' "$console_user" "$console_uid" > "$RELAUNCH_MARKER"
+      /bin/chmod 600 "$RELAUNCH_MARKER"
+    fi
+  fi
+fi
+
+# Terminate only processes whose command line points inside the installed app.
+# The privileged updater (`osascript` -> `/usr/sbin/installer`) lives outside
+# the app bundle and therefore survives long enough to finish replacing it.
+app_pids="$(processes_matching "$APP/Contents/" 2>/dev/null || true)"
+for pid in $app_pids; do
+  /bin/kill -TERM "$pid" 2>/dev/null || true
 done
 
-if [[ -n "$pids" ]]; then
+if [[ -n "$app_pids" ]]; then
   /bin/sleep 1
 fi
 
-for pid in $(/usr/bin/pgrep -f "$BIN" 2>/dev/null || true); do
+for pid in $(processes_matching "$APP/Contents/" 2>/dev/null || true); do
   /bin/kill -KILL "$pid" 2>/dev/null || true
 done
 
