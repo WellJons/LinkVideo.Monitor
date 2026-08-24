@@ -3,26 +3,51 @@ set -u
 
 APP="/Applications/LinkVideo.Monitor.app"
 BIN="$APP/Contents/MacOS/LinkVideo.Monitor"
+STATE_DIR="/var/db/LinkVideo.Monitor"
+RELAUNCH_MARKER="$STATE_DIR/update-relaunch"
 
-terminate_tree() {
-  local pid="$1"
-  local child
-  for child in $(/usr/bin/pgrep -P "$pid" 2>/dev/null || true); do
-    terminate_tree "$child"
-  done
-  /bin/kill -TERM "$pid" 2>/dev/null || true
+app_processes() {
+  /usr/bin/pgrep -f "^${APP}/Contents/" 2>/dev/null || true
 }
 
-pids="$(/usr/bin/pgrep -f "$BIN" 2>/dev/null || true)"
-for pid in $pids; do
-  terminate_tree "$pid"
+main_processes() {
+  /usr/bin/pgrep -f "^${BIN}([[:space:]]|$)" 2>/dev/null || true
+}
+
+# Package scripts run as root. Keep update state outside world-writable
+# locations so another local user cannot replace the marker with a symlink.
+/bin/mkdir -p "$STATE_DIR"
+/usr/sbin/chown root:wheel "$STATE_DIR"
+/bin/chmod 700 "$STATE_DIR"
+/bin/rm -f "$RELAUNCH_MARKER"
+
+main_pids="$(main_processes)"
+if [[ -n "$main_pids" ]]; then
+  console_user="$(/usr/bin/stat -f '%Su' /dev/console 2>/dev/null || true)"
+  if [[ -n "$console_user" && "$console_user" != "root" && "$console_user" != "loginwindow" ]]; then
+    console_uid="$(/usr/bin/id -u "$console_user" 2>/dev/null || true)"
+    case "$console_uid" in
+      ''|*[!0-9]*) ;;
+      *)
+        (umask 077; /usr/bin/printf '%s\n%s\n' "$console_user" "$console_uid" > "$RELAUNCH_MARKER")
+        ;;
+    esac
+  fi
+fi
+
+# Terminate only processes launched from inside the installed application.
+# The privileged updater (`osascript` -> `/usr/sbin/installer`) lives outside
+# this prefix and therefore remains alive while the package replaces the app.
+app_pids="$(app_processes)"
+for pid in $app_pids; do
+  /bin/kill -TERM "$pid" 2>/dev/null || true
 done
 
-if [[ -n "$pids" ]]; then
+if [[ -n "$app_pids" ]]; then
   /bin/sleep 1
 fi
 
-for pid in $(/usr/bin/pgrep -f "$BIN" 2>/dev/null || true); do
+for pid in $(app_processes); do
   /bin/kill -KILL "$pid" 2>/dev/null || true
 done
 
