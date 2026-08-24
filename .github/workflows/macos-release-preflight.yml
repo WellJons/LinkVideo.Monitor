@@ -1,0 +1,57 @@
+name: macOS Release Preflight
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'scripts/macos/release-sign-notarize.sh'
+      - 'scripts/macos/build-app.sh'
+      - 'scripts/macos/build-bundled-app.sh'
+      - 'scripts/macos/package-pkg.sh'
+      - 'scripts/macos/package-dmg.sh'
+      - 'docs/MACOS_RELEASE.md'
+      - '.github/workflows/macos-release-preflight.yml'
+  pull_request:
+    paths:
+      - 'scripts/macos/release-sign-notarize.sh'
+      - 'scripts/macos/build-app.sh'
+      - 'scripts/macos/build-bundled-app.sh'
+      - 'scripts/macos/package-pkg.sh'
+      - 'scripts/macos/package-dmg.sh'
+      - 'docs/MACOS_RELEASE.md'
+      - '.github/workflows/macos-release-preflight.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain info
+        run: |
+          sw_vers
+          xcodebuild -version
+          xcrun notarytool --version
+      - name: Validate production release script
+        run: |
+          bash -n scripts/macos/release-sign-notarize.sh
+          bash scripts/macos/release-sign-notarize.sh --check
+      - name: Verify fail-closed credential handling
+        run: |
+          set -euo pipefail
+          if MACOS_VERSION=0.1.0 \
+             MACOS_APP_IDENTITY='' \
+             MACOS_INSTALLER_IDENTITY='' \
+             MACOS_NOTARY_PROFILE='' \
+             MACOS_NOTARY_APPLE_ID='' \
+             MACOS_NOTARY_TEAM_ID='' \
+             MACOS_NOTARY_PASSWORD='' \
+             bash scripts/macos/release-sign-notarize.sh >release-no-creds.log 2>&1; then
+            echo 'Release script unexpectedly succeeded without signing credentials' >&2
+            cat release-no-creds.log >&2
+            exit 1
+          fi
+          grep -q 'MACOS_APP_IDENTITY is required' release-no-creds.log

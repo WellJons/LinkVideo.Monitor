@@ -10,8 +10,8 @@
    - [x] macOS uninstall command with ServiceManagement cleanup
    - [x] Uninstall preserves settings/logs by default and supports explicit `--purge-data`
    - [x] macOS ServiceManagement autostart/login item
-   - [ ] Production Developer ID Application/Installer signing
-   - [ ] Apple notarization
+   - [x] Credential-gated production release pipeline for Developer ID Application/Installer signing + notarization/stapling
+   - [ ] Production artifacts signed/notarized with the real LinkVideo Apple Developer identities
    - [ ] Physical-Mac installer/upgrade/uninstaller validation
 
 2. **Трансляция потока**
@@ -39,6 +39,7 @@
    - [x] H.265 VideoToolbox
    - [x] Encoder capability probing/fallback through shared pipeline
    - [x] Universal arm64 + x86_64 app/helpers
+   - [x] Bundled pinned Universal FFmpeg with VideoToolbox/x264/x265/AAC capability verification
    - [ ] Physical-Mac H.264/H.265 hardware encode validation under load
 
 5. **Синхронизация звука и видео**
@@ -66,7 +67,7 @@
 - [x] Sleep prevention / keep display on
 - [x] Platform-specific update manifest and update capability reporting
 - [ ] Signed/notarized automatic macOS updater
-- [ ] Bundled pinned Universal FFmpeg
+- [x] Bundled pinned Universal FFmpeg
 - [x] Bundled pinned Universal MediaMTX with upstream checksum verification
 
 ## Правило архитектуры
