@@ -14,33 +14,25 @@ on:
         type: boolean
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: macos-production-release
   cancel-in-progress: false
 
 jobs:
-  release:
+  build:
     if: github.ref == 'refs/heads/main'
     runs-on: macos-latest
     env:
       VERSION: ${{ inputs.version }}
-      UPDATES_REPO: WellJons/LinkVideo.Monitor.Updates
       MACOS_APP_IDENTITY: ${{ vars.MACOS_APP_IDENTITY }}
       MACOS_INSTALLER_IDENTITY: ${{ vars.MACOS_INSTALLER_IDENTITY }}
-      MACOS_APP_CERT_P12_BASE64: ${{ secrets.MACOS_APP_CERT_P12_BASE64 }}
-      MACOS_APP_CERT_PASSWORD: ${{ secrets.MACOS_APP_CERT_PASSWORD }}
-      MACOS_INSTALLER_CERT_P12_BASE64: ${{ secrets.MACOS_INSTALLER_CERT_P12_BASE64 }}
-      MACOS_INSTALLER_CERT_PASSWORD: ${{ secrets.MACOS_INSTALLER_CERT_PASSWORD }}
-      MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
-      MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
-      MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
-      UPDATES_REPO_TOKEN: ${{ secrets.UPDATES_REPO_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          ref: ${{ github.sha }}
+          fetch-depth: 1
           lfs: false
 
       - uses: actions/setup-go@v5
@@ -48,7 +40,15 @@ jobs:
           go-version: '1.20.x'
           cache: false
 
-      - name: Validate release request
+      - name: Validate release request and configured signing inputs
+        env:
+          MACOS_APP_CERT_P12_BASE64: ${{ secrets.MACOS_APP_CERT_P12_BASE64 }}
+          MACOS_APP_CERT_PASSWORD: ${{ secrets.MACOS_APP_CERT_PASSWORD }}
+          MACOS_INSTALLER_CERT_P12_BASE64: ${{ secrets.MACOS_INSTALLER_CERT_P12_BASE64 }}
+          MACOS_INSTALLER_CERT_PASSWORD: ${{ secrets.MACOS_INSTALLER_CERT_PASSWORD }}
+          MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+          MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
         shell: bash
         run: |
           set -euo pipefail
@@ -65,14 +65,18 @@ jobs:
           for name in \
             MACOS_APP_CERT_P12_BASE64 MACOS_APP_CERT_PASSWORD \
             MACOS_INSTALLER_CERT_P12_BASE64 MACOS_INSTALLER_CERT_PASSWORD \
-            MACOS_NOTARY_APPLE_ID MACOS_NOTARY_TEAM_ID MACOS_NOTARY_PASSWORD \
-            UPDATES_REPO_TOKEN
+            MACOS_NOTARY_APPLE_ID MACOS_NOTARY_TEAM_ID MACOS_NOTARY_PASSWORD
           do
             test -n "${!name:-}" || { echo "Repository secret $name is required." >&2; exit 1; }
           done
-          echo "Production release request validated for macOS $VERSION at $GITHUB_SHA"
+          echo "Production build request validated for macOS $VERSION at $GITHUB_SHA"
 
       - name: Import Developer ID certificates into an ephemeral keychain
+        env:
+          MACOS_APP_CERT_P12_BASE64: ${{ secrets.MACOS_APP_CERT_P12_BASE64 }}
+          MACOS_APP_CERT_PASSWORD: ${{ secrets.MACOS_APP_CERT_PASSWORD }}
+          MACOS_INSTALLER_CERT_P12_BASE64: ${{ secrets.MACOS_INSTALLER_CERT_P12_BASE64 }}
+          MACOS_INSTALLER_CERT_PASSWORD: ${{ secrets.MACOS_INSTALLER_CERT_PASSWORD }}
         shell: bash
         run: |
           set -euo pipefail
@@ -119,6 +123,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           MACOS_VERSION: ${{ inputs.version }}
+          MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+          MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
         shell: bash
         run: |
           set -euo pipefail
@@ -150,13 +157,8 @@ jobs:
             "$DMG_SHA256" "$(basename "$DMG")" \
             "$ZIP_SHA256" "$(basename "$ZIP")" \
             > "build/macos/LinkVideo.Monitor_macOS_${VERSION}_SHA256SUMS.txt"
-          echo "MACOS_PKG=$PKG" >> "$GITHUB_ENV"
-          echo "MACOS_DMG=$DMG" >> "$GITHUB_ENV"
-          echo "MACOS_ZIP=$ZIP" >> "$GITHUB_ENV"
-          echo "MACOS_PKG_SHA256=$PKG_SHA256" >> "$GITHUB_ENV"
-          echo "MACOS_CHECKSUMS=build/macos/LinkVideo.Monitor_macOS_${VERSION}_SHA256SUMS.txt" >> "$GITHUB_ENV"
 
-      - name: Upload signed production artifacts to this workflow
+      - name: Upload signed production artifacts
         uses: actions/upload-artifact@v4
         with:
           name: LinkVideo-Monitor-macOS-${{ inputs.version }}-production
@@ -166,6 +168,67 @@ jobs:
             build/macos/LinkVideo.Monitor_macOS_${{ inputs.version }}.dmg
             build/macos/LinkVideo.Monitor_macOS_${{ inputs.version }}_SHA256SUMS.txt
           if-no-files-found: error
+
+      - name: Remove ephemeral signing keychain
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [ -n "${MACOS_RELEASE_KEYCHAIN:-}" ]; then
+            /usr/bin/security delete-keychain "$MACOS_RELEASE_KEYCHAIN"
+          fi
+          /bin/rm -f "$RUNNER_TEMP/linkvideo-app.p12" "$RUNNER_TEMP/linkvideo-installer.p12"
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ inputs.version }}
+      UPDATES_REPO: WellJons/LinkVideo.Monitor.Updates
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          lfs: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: LinkVideo-Monitor-macOS-${{ inputs.version }}-production
+          path: release-assets
+
+      - name: Verify transferred production artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          CHECKSUMS="LinkVideo.Monitor_macOS_${VERSION}_SHA256SUMS.txt"
+          test -f "$CHECKSUMS" || { echo "Missing $CHECKSUMS" >&2; exit 1; }
+          sha256sum -c "$CHECKSUMS"
+          PKG="LinkVideo.Monitor_macOS_${VERSION}.pkg"
+          DMG="LinkVideo.Monitor_macOS_${VERSION}.dmg"
+          ZIP="LinkVideo.Monitor_macOS_${VERSION}.zip"
+          for path in "$PKG" "$DMG" "$ZIP"; do
+            test -f "$path" || { echo "Missing transferred artifact: $path" >&2; exit 1; }
+          done
+          PKG_SHA256="$(sha256sum "$PKG" | awk '{print $1}')"
+          echo "MACOS_PKG=$GITHUB_WORKSPACE/release-assets/$PKG" >> "$GITHUB_ENV"
+          echo "MACOS_DMG=$GITHUB_WORKSPACE/release-assets/$DMG" >> "$GITHUB_ENV"
+          echo "MACOS_ZIP=$GITHUB_WORKSPACE/release-assets/$ZIP" >> "$GITHUB_ENV"
+          echo "MACOS_CHECKSUMS=$GITHUB_WORKSPACE/release-assets/$CHECKSUMS" >> "$GITHUB_ENV"
+          echo "MACOS_PKG_SHA256=$PKG_SHA256" >> "$GITHUB_ENV"
+
+      - name: Check public update repository credentials
+        env:
+          GH_TOKEN: ${{ secrets.UPDATES_REPO_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN" || { echo 'Repository secret UPDATES_REPO_TOKEN is required.' >&2; exit 1; }
+          gh auth status
+          gh repo view "$UPDATES_REPO" >/dev/null
 
       - name: Create immutable source tag
         shell: bash
@@ -200,8 +263,8 @@ jobs:
               rm -f "$RUNNER_TEMP/public-existing/$name"
               if gh release download "$PUBLIC_TAG" --repo "$UPDATES_REPO" \
                    --dir "$RUNNER_TEMP/public-existing" --pattern "$name" >/dev/null 2>&1; then
-                local_sha="$(/usr/bin/shasum -a 256 "$asset" | /usr/bin/awk '{print $1}')"
-                public_sha="$(/usr/bin/shasum -a 256 "$RUNNER_TEMP/public-existing/$name" | /usr/bin/awk '{print $1}')"
+                local_sha="$(sha256sum "$asset" | awk '{print $1}')"
+                public_sha="$(sha256sum "$RUNNER_TEMP/public-existing/$name" | awk '{print $1}')"
                 if [ "$local_sha" != "$public_sha" ]; then
                   echo "Public release $PUBLIC_TAG already contains different bytes for $name." >&2
                   echo "Publish a new version instead of replacing an immutable update." >&2
@@ -235,7 +298,7 @@ jobs:
           gh release download "$PUBLIC_TAG" --repo "$UPDATES_REPO" \
             --dir "$RUNNER_TEMP/public-verify" --pattern "$PKG_NAME"
           PUBLIC_PKG="$RUNNER_TEMP/public-verify/$PKG_NAME"
-          PUBLIC_SHA="$(/usr/bin/shasum -a 256 "$PUBLIC_PKG" | /usr/bin/awk '{print $1}')"
+          PUBLIC_SHA="$(sha256sum "$PUBLIC_PKG" | awk '{print $1}')"
           if [ "$PUBLIC_SHA" != "$MACOS_PKG_SHA256" ]; then
             echo "Public macOS PKG checksum mismatch." >&2
             exit 1
@@ -324,13 +387,3 @@ jobs:
               raise SystemExit(f"manifest download URL mismatch: {data.get('download_url')!r}")
           print(json.dumps(data, ensure_ascii=False, indent=2))
           PY
-
-      - name: Remove ephemeral signing keychain
-        if: always()
-        shell: bash
-        run: |
-          set +e
-          if [ -n "${MACOS_RELEASE_KEYCHAIN:-}" ]; then
-            /usr/bin/security delete-keychain "$MACOS_RELEASE_KEYCHAIN"
-          fi
-          /bin/rm -f "$RUNNER_TEMP/linkvideo-app.p12" "$RUNNER_TEMP/linkvideo-installer.p12"
