@@ -16,7 +16,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -229,7 +228,7 @@ func downloadVerifiedMacOSUpdatePackage(result updateCheckResult) (string, error
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", "LinkVideo-Monitor-macOS-Updater/"+appVersion)
+	req.Header.Set("User-Agent", macOSUpdaterUserAgentPrefix+appVersion)
 	req.Header.Set("Accept", "application/octet-stream")
 	resp, err := (&http.Client{Timeout: 15 * time.Minute}).Do(req)
 	if err != nil {
@@ -347,31 +346,6 @@ func verifyMacOSPackageMetadata(pkgPath, targetVersion string) error {
 	return nil
 }
 
-const macOSUpdateInstallerAppleScript = `on run argv
-set pkgPath to item 1 of argv
-try
-    do shell script "/usr/sbin/installer -pkg " & quoted form of pkgPath & " -target /" with administrator privileges
-on error errMsg number errNum
-    try
-        do shell script "/usr/bin/open -gja '/Applications/LinkVideo.Monitor.app' --args --background"
-    end try
-    error errMsg number errNum
-end try
-return "installed"
-end run`
-
-func launchMacOSUpdateInstaller(pkgPath string) error {
-	cmd := exec.Command("/usr/bin/osascript", "-e", macOSUpdateInstallerAppleScript, "--", pkgPath)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("osascript: %w: %s", err, strings.TrimSpace(string(out)))
-	}
-	if !strings.Contains(strings.ToLower(string(out)), "installed") {
-		return errors.New("системный установщик не подтвердил завершение")
-	}
-	return nil
-}
-
 func macOSAutomaticUpdateFailureMarkerPath() string {
 	dir, err := macOSAutomaticUpdateDirectory()
 	if err != nil {
@@ -459,9 +433,4 @@ func cleanupStaleMacOSUpdatePackages() {
 			_ = os.Remove(filepath.Join(dir, entry.Name()))
 		}
 	}
-}
-
-func parsePositiveInt(value string) (int, bool) {
-	n, err := strconv.Atoi(strings.TrimSpace(value))
-	return n, err == nil && n > 0
 }
