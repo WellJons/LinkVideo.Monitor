@@ -4,9 +4,9 @@ package main
 
 import "testing"
 
-func TestAutomaticUpdateInstallSupportedOnDarwin(t *testing.T) {
-	if !automaticUpdateInstallSupported() {
-		t.Fatal("macOS signed PKG updater must report automatic install support")
+func TestDevelopmentDarwinBinaryDoesNotAdvertiseManagedInstall(t *testing.T) {
+	if automaticUpdateInstallSupported() {
+		t.Fatal("test/development binary outside the managed Developer ID app must not advertise automatic install")
 	}
 }
 
