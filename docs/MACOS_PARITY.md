@@ -11,6 +11,7 @@
    - [x] Uninstall preserves settings/logs by default and supports explicit `--purge-data`
    - [x] macOS ServiceManagement autostart/login item
    - [x] Credential-gated production release pipeline for Developer ID Application/Installer signing + notarization/stapling
+   - [x] Managed updater implementation for Developer ID / Gatekeeper-verified macOS PKG releases
    - [ ] Production artifacts signed/notarized with the real LinkVideo Apple Developer identities
    - [ ] Physical-Mac installer/upgrade/uninstaller validation
 
@@ -66,7 +67,8 @@
 - [x] Native recording overlay
 - [x] Sleep prevention / keep display on
 - [x] Platform-specific update manifest and update capability reporting
-- [ ] Signed/notarized automatic macOS updater
+- [x] Signed-PKG automatic macOS updater implementation with Developer ID Team ID + Gatekeeper verification
+- [ ] Physical-Mac automatic update validation using a real notarized LinkVideo release
 - [x] Bundled pinned Universal FFmpeg
 - [x] Bundled pinned Universal MediaMTX with upstream checksum verification
 
