@@ -17,6 +17,7 @@ const macOSWorkspaceEventDebounce = 4 * time.Second
 
 func startResumeWatcher(a *app) {
 	go runMacOSWorkspaceWatcher(a)
+	startMacOSAutomaticUpdates(a)
 }
 
 func runMacOSWorkspaceWatcher(a *app) {
