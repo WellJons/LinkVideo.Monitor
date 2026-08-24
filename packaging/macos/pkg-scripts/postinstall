@@ -2,15 +2,18 @@
 set -u
 
 APP="/Applications/LinkVideo.Monitor.app"
-RELAUNCH_MARKER="/var/tmp/ru.linkvideo.monitor.relaunch"
+STATE_DIR="/var/db/LinkVideo.Monitor"
+RELAUNCH_MARKER="$STATE_DIR/update-relaunch"
 
 if [[ ! -f "$RELAUNCH_MARKER" ]]; then
+  /bin/rmdir "$STATE_DIR" 2>/dev/null || true
   exit 0
 fi
 
 console_user="$(/usr/bin/sed -n '1p' "$RELAUNCH_MARKER" 2>/dev/null || true)"
 console_uid="$(/usr/bin/sed -n '2p' "$RELAUNCH_MARKER" 2>/dev/null || true)"
 /bin/rm -f "$RELAUNCH_MARKER"
+/bin/rmdir "$STATE_DIR" 2>/dev/null || true
 
 case "$console_uid" in
   ''|*[!0-9]*) exit 0 ;;
