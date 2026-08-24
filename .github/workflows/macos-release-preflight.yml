@@ -41,9 +41,21 @@ jobs:
         run: |
           bash -n scripts/macos/release-sign-notarize.sh
           bash scripts/macos/release-sign-notarize.sh --check
-      - name: Validate production workflow structure
+      - name: Validate production workflow structure and credential isolation
         run: |
-          ruby -e 'require "yaml"; YAML.safe_load(File.read(ARGV[0]), aliases: true)' .github/workflows/macos-production-release.yml
+          ruby - .github/workflows/macos-production-release.yml <<'RUBY'
+          require 'yaml'
+          path = ARGV.fetch(0)
+          data = YAML.safe_load(File.read(path), aliases: true)
+          abort 'top-level release workflow permissions must be contents: read' unless data.dig('permissions', 'contents') == 'read'
+          build = data.dig('jobs', 'build') or abort 'missing build job'
+          publish = data.dig('jobs', 'publish') or abort 'missing publish job'
+          abort 'publish job must have contents: write' unless publish.dig('permissions', 'contents') == 'write'
+          abort 'build job must not receive UPDATES_REPO_TOKEN' if build.to_s.include?('UPDATES_REPO_TOKEN')
+          %w[MACOS_APP_CERT_P12_BASE64 MACOS_INSTALLER_CERT_P12_BASE64 MACOS_NOTARY_PASSWORD].each do |secret|
+            abort "publish job must not receive #{secret}" if publish.to_s.include?(secret)
+          end
+          RUBY
           grep -q 'workflow_dispatch:' .github/workflows/macos-production-release.yml
           grep -q 'scripts/macos/release-sign-notarize.sh' .github/workflows/macos-production-release.yml
           grep -q 'update-manifest-macos.json' .github/workflows/macos-production-release.yml
