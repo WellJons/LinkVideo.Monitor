@@ -1,0 +1,389 @@
+name: macOS Production Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: macOS release version, for example 0.1.0 or 0.1.0-beta.1
+        required: true
+        type: string
+      mandatory:
+        description: Mark this update as mandatory in the macOS update manifest
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-production-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: macos-latest
+    env:
+      VERSION: ${{ inputs.version }}
+      MACOS_APP_IDENTITY: ${{ vars.MACOS_APP_IDENTITY }}
+      MACOS_INSTALLER_IDENTITY: ${{ vars.MACOS_INSTALLER_IDENTITY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          lfs: false
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.20.x'
+          cache: false
+
+      - name: Validate release request and configured signing inputs
+        env:
+          MACOS_APP_CERT_P12_BASE64: ${{ secrets.MACOS_APP_CERT_P12_BASE64 }}
+          MACOS_APP_CERT_PASSWORD: ${{ secrets.MACOS_APP_CERT_PASSWORD }}
+          MACOS_INSTALLER_CERT_P12_BASE64: ${{ secrets.MACOS_INSTALLER_CERT_P12_BASE64 }}
+          MACOS_INSTALLER_CERT_PASSWORD: ${{ secrets.MACOS_INSTALLER_CERT_PASSWORD }}
+          MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+          MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+)+([+-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Unsupported macOS release version: $VERSION" >&2
+            exit 1
+          fi
+          LOWER_VERSION="$(/usr/bin/printf '%s' "$VERSION" | /usr/bin/tr '[:upper:]' '[:lower:]')"
+          case "$LOWER_VERSION" in
+            *dev*) echo "Development versions cannot be published as a production macOS release." >&2; exit 1 ;;
+          esac
+          test -n "$MACOS_APP_IDENTITY" || { echo 'Repository variable MACOS_APP_IDENTITY is required.' >&2; exit 1; }
+          test -n "$MACOS_INSTALLER_IDENTITY" || { echo 'Repository variable MACOS_INSTALLER_IDENTITY is required.' >&2; exit 1; }
+          for name in \
+            MACOS_APP_CERT_P12_BASE64 MACOS_APP_CERT_PASSWORD \
+            MACOS_INSTALLER_CERT_P12_BASE64 MACOS_INSTALLER_CERT_PASSWORD \
+            MACOS_NOTARY_APPLE_ID MACOS_NOTARY_TEAM_ID MACOS_NOTARY_PASSWORD
+          do
+            test -n "${!name:-}" || { echo "Repository secret $name is required." >&2; exit 1; }
+          done
+          echo "Production build request validated for macOS $VERSION at $GITHUB_SHA"
+
+      - name: Import Developer ID certificates into an ephemeral keychain
+        env:
+          MACOS_APP_CERT_P12_BASE64: ${{ secrets.MACOS_APP_CERT_P12_BASE64 }}
+          MACOS_APP_CERT_PASSWORD: ${{ secrets.MACOS_APP_CERT_PASSWORD }}
+          MACOS_INSTALLER_CERT_P12_BASE64: ${{ secrets.MACOS_INSTALLER_CERT_P12_BASE64 }}
+          MACOS_INSTALLER_CERT_PASSWORD: ${{ secrets.MACOS_INSTALLER_CERT_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEYCHAIN="$RUNNER_TEMP/linkvideo-release.keychain-db"
+          KEYCHAIN_PASSWORD="$(/usr/bin/openssl rand -hex 24)"
+          export KEYCHAIN KEYCHAIN_PASSWORD
+          python3 - <<'PY'
+          import base64, os, pathlib
+          root = pathlib.Path(os.environ['RUNNER_TEMP'])
+          pairs = [
+              ('MACOS_APP_CERT_P12_BASE64', 'linkvideo-app.p12'),
+              ('MACOS_INSTALLER_CERT_P12_BASE64', 'linkvideo-installer.p12'),
+          ]
+          for env_name, file_name in pairs:
+              try:
+                  data = base64.b64decode(os.environ[env_name], validate=True)
+              except Exception as exc:
+                  raise SystemExit(f'{env_name} is not valid base64: {exc}')
+              if not data:
+                  raise SystemExit(f'{env_name} decoded to an empty certificate')
+              (root / file_name).write_bytes(data)
+          PY
+          /usr/bin/security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          /usr/bin/security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          /usr/bin/security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          /usr/bin/security import "$RUNNER_TEMP/linkvideo-app.p12" \
+            -k "$KEYCHAIN" -P "$MACOS_APP_CERT_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          /usr/bin/security import "$RUNNER_TEMP/linkvideo-installer.p12" \
+            -k "$KEYCHAIN" -P "$MACOS_INSTALLER_CERT_PASSWORD" \
+            -T /usr/bin/pkgbuild -T /usr/bin/productsign -T /usr/bin/security
+          /usr/bin/security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          EXISTING_KEYCHAINS="$(/usr/bin/security list-keychains -d user | /usr/bin/tr -d '\"')"
+          # Paths on GitHub-hosted macOS runners do not contain spaces.
+          # shellcheck disable=SC2086
+          /usr/bin/security list-keychains -d user -s "$KEYCHAIN" $EXISTING_KEYCHAINS
+          /usr/bin/security find-identity -v "$KEYCHAIN"
+          /usr/bin/security find-certificate -a -c "$MACOS_APP_IDENTITY" "$KEYCHAIN" >/dev/null
+          /usr/bin/security find-certificate -a -c "$MACOS_INSTALLER_IDENTITY" "$KEYCHAIN" >/dev/null
+          echo "MACOS_RELEASE_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+
+      - name: Build, sign and notarize production artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MACOS_VERSION: ${{ inputs.version }}
+          MACOS_NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          MACOS_NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+          MACOS_NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash scripts/macos/release-sign-notarize.sh
+
+      - name: Verify production artifact identity and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP='build/macos/LinkVideo.Monitor.app'
+          ZIP="build/macos/LinkVideo.Monitor_macOS_${VERSION}.zip"
+          PKG="build/macos/LinkVideo.Monitor_macOS_${VERSION}.pkg"
+          DMG="build/macos/LinkVideo.Monitor_macOS_${VERSION}.dmg"
+          for path in "$ZIP" "$PKG" "$DMG"; do
+            test -f "$path" || { echo "Missing production artifact: $path" >&2; exit 1; }
+          done
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
+          /usr/sbin/spctl --assess --type execute --verbose=4 "$APP"
+          /usr/sbin/pkgutil --check-signature "$PKG" | /usr/bin/grep -q 'Developer ID Installer:'
+          /usr/sbin/spctl --assess --type install --verbose=4 "$PKG"
+          /usr/bin/xcrun stapler validate "$APP"
+          /usr/bin/xcrun stapler validate "$PKG"
+          /usr/bin/xcrun stapler validate "$DMG"
+          PKG_SHA256="$(/usr/bin/shasum -a 256 "$PKG" | /usr/bin/awk '{print $1}')"
+          DMG_SHA256="$(/usr/bin/shasum -a 256 "$DMG" | /usr/bin/awk '{print $1}')"
+          ZIP_SHA256="$(/usr/bin/shasum -a 256 "$ZIP" | /usr/bin/awk '{print $1}')"
+          printf '%s  %s\n%s  %s\n%s  %s\n' \
+            "$PKG_SHA256" "$(basename "$PKG")" \
+            "$DMG_SHA256" "$(basename "$DMG")" \
+            "$ZIP_SHA256" "$(basename "$ZIP")" \
+            > "build/macos/LinkVideo.Monitor_macOS_${VERSION}_SHA256SUMS.txt"
+
+      - name: Upload signed production artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: LinkVideo-Monitor-macOS-${{ inputs.version }}-production
+          path: |
+            build/macos/LinkVideo.Monitor_macOS_${{ inputs.version }}.zip
+            build/macos/LinkVideo.Monitor_macOS_${{ inputs.version }}.pkg
+            build/macos/LinkVideo.Monitor_macOS_${{ inputs.version }}.dmg
+            build/macos/LinkVideo.Monitor_macOS_${{ inputs.version }}_SHA256SUMS.txt
+          if-no-files-found: error
+
+      - name: Remove ephemeral signing keychain
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          if [ -n "${MACOS_RELEASE_KEYCHAIN:-}" ]; then
+            /usr/bin/security delete-keychain "$MACOS_RELEASE_KEYCHAIN"
+          fi
+          /bin/rm -f "$RUNNER_TEMP/linkvideo-app.p12" "$RUNNER_TEMP/linkvideo-installer.p12"
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ inputs.version }}
+      UPDATES_REPO: WellJons/LinkVideo.Monitor.Updates
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          lfs: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: LinkVideo-Monitor-macOS-${{ inputs.version }}-production
+          path: release-assets
+
+      - name: Verify transferred production artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          CHECKSUMS="LinkVideo.Monitor_macOS_${VERSION}_SHA256SUMS.txt"
+          test -f "$CHECKSUMS" || { echo "Missing $CHECKSUMS" >&2; exit 1; }
+          sha256sum -c "$CHECKSUMS"
+          PKG="LinkVideo.Monitor_macOS_${VERSION}.pkg"
+          DMG="LinkVideo.Monitor_macOS_${VERSION}.dmg"
+          ZIP="LinkVideo.Monitor_macOS_${VERSION}.zip"
+          for path in "$PKG" "$DMG" "$ZIP"; do
+            test -f "$path" || { echo "Missing transferred artifact: $path" >&2; exit 1; }
+          done
+          PKG_SHA256="$(sha256sum "$PKG" | awk '{print $1}')"
+          echo "MACOS_PKG=$GITHUB_WORKSPACE/release-assets/$PKG" >> "$GITHUB_ENV"
+          echo "MACOS_DMG=$GITHUB_WORKSPACE/release-assets/$DMG" >> "$GITHUB_ENV"
+          echo "MACOS_ZIP=$GITHUB_WORKSPACE/release-assets/$ZIP" >> "$GITHUB_ENV"
+          echo "MACOS_CHECKSUMS=$GITHUB_WORKSPACE/release-assets/$CHECKSUMS" >> "$GITHUB_ENV"
+          echo "MACOS_PKG_SHA256=$PKG_SHA256" >> "$GITHUB_ENV"
+
+      - name: Check public update repository credentials
+        env:
+          GH_TOKEN: ${{ secrets.UPDATES_REPO_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN" || { echo 'Repository secret UPDATES_REPO_TOKEN is required.' >&2; exit 1; }
+          gh auth status
+          gh repo view "$UPDATES_REPO" >/dev/null
+
+      - name: Create immutable source tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="macos-v${VERSION}"
+          git fetch --tags --force
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            EXISTING="$(git rev-list -n 1 "$TAG")"
+            if [ "$EXISTING" != "$GITHUB_SHA" ]; then
+              echo "Source tag $TAG already points to $EXISTING instead of $GITHUB_SHA." >&2
+              exit 1
+            fi
+            echo "Source tag $TAG already points to this release commit."
+          else
+            git tag "$TAG" "$GITHUB_SHA"
+            git push origin "refs/tags/$TAG"
+          fi
+
+      - name: Publish immutable public macOS release assets
+        env:
+          GH_TOKEN: ${{ secrets.UPDATES_REPO_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          PUBLIC_TAG="v${VERSION}"
+          ASSETS=("$MACOS_PKG" "$MACOS_DMG" "$MACOS_ZIP" "$MACOS_CHECKSUMS")
+          if gh release view "$PUBLIC_TAG" --repo "$UPDATES_REPO" >/dev/null 2>&1; then
+            mkdir -p "$RUNNER_TEMP/public-existing"
+            for asset in "${ASSETS[@]}"; do
+              name="$(basename "$asset")"
+              rm -f "$RUNNER_TEMP/public-existing/$name"
+              if gh release download "$PUBLIC_TAG" --repo "$UPDATES_REPO" \
+                   --dir "$RUNNER_TEMP/public-existing" --pattern "$name" >/dev/null 2>&1; then
+                local_sha="$(sha256sum "$asset" | awk '{print $1}')"
+                public_sha="$(sha256sum "$RUNNER_TEMP/public-existing/$name" | awk '{print $1}')"
+                if [ "$local_sha" != "$public_sha" ]; then
+                  echo "Public release $PUBLIC_TAG already contains different bytes for $name." >&2
+                  echo "Publish a new version instead of replacing an immutable update." >&2
+                  exit 1
+                fi
+                echo "Reusing immutable public asset $name"
+              else
+                gh release upload "$PUBLIC_TAG" "$asset" --repo "$UPDATES_REPO"
+              fi
+            done
+          else
+            ARGS=(release create "$PUBLIC_TAG" "${ASSETS[@]}" --repo "$UPDATES_REPO" \
+              --title "LinkVideo Monitor $VERSION" \
+              --notes "Подписанная и нотарифицированная версия LinkVideo Monitor для macOS. Автообновление использует PKG; DMG и ZIP доступны для ручной установки.")
+            if [[ "$VERSION" == *-* ]]; then
+              ARGS+=(--prerelease)
+            fi
+            gh "${ARGS[@]}"
+          fi
+
+      - name: Verify public PKG before publishing macOS manifest
+        env:
+          GH_TOKEN: ${{ secrets.UPDATES_REPO_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          PUBLIC_TAG="v${VERSION}"
+          PKG_NAME="$(basename "$MACOS_PKG")"
+          rm -rf "$RUNNER_TEMP/public-verify"
+          mkdir -p "$RUNNER_TEMP/public-verify"
+          gh release download "$PUBLIC_TAG" --repo "$UPDATES_REPO" \
+            --dir "$RUNNER_TEMP/public-verify" --pattern "$PKG_NAME"
+          PUBLIC_PKG="$RUNNER_TEMP/public-verify/$PKG_NAME"
+          PUBLIC_SHA="$(sha256sum "$PUBLIC_PKG" | awk '{print $1}')"
+          if [ "$PUBLIC_SHA" != "$MACOS_PKG_SHA256" ]; then
+            echo "Public macOS PKG checksum mismatch." >&2
+            exit 1
+          fi
+          echo "Public macOS PKG verified: $PUBLIC_SHA  $PKG_NAME"
+
+      - name: Publish macOS update manifest last
+        env:
+          GH_TOKEN: ${{ secrets.UPDATES_REPO_TOKEN }}
+          MANDATORY: ${{ inputs.mandatory }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          PUBLIC_TAG="v${VERSION}"
+          PKG_NAME="$(basename "$MACOS_PKG")"
+          DOWNLOAD_URL="https://github.com/$UPDATES_REPO/releases/download/$PUBLIC_TAG/$PKG_NAME"
+          rm -rf "$RUNNER_TEMP/updates-repo"
+          gh repo clone "$UPDATES_REPO" "$RUNNER_TEMP/updates-repo"
+          cd "$RUNNER_TEMP/updates-repo"
+          python3 - "$VERSION" "$DOWNLOAD_URL" "$MACOS_PKG_SHA256" "$MANDATORY" <<'PY'
+          import json, sys
+          version, download_url, sha256, mandatory = sys.argv[1:5]
+          manifest = {
+              "version": version,
+              "platform": "darwin",
+              "architectures": ["arm64", "amd64"],
+              "download_url": download_url,
+              "sha256": sha256,
+              "notes": f"Доступна версия LinkVideo Monitor {version} для macOS.",
+              "mandatory": mandatory.lower() == "true",
+          }
+          with open("update-manifest-macos.json", "w", encoding="utf-8") as f:
+              json.dump(manifest, f, ensure_ascii=False, indent=2)
+              f.write("\n")
+          PY
+          git config user.name "LinkVideo Release Bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add update-manifest-macos.json
+          if git diff --cached --quiet; then
+            echo "macOS manifest is already up to date."
+          else
+            git commit -m "Publish LinkVideo Monitor macOS $VERSION"
+            for attempt in 1 2 3; do
+              if git push origin HEAD:main; then
+                break
+              fi
+              if [ "$attempt" = 3 ]; then
+                echo "Failed to publish macOS manifest after three attempts." >&2
+                exit 1
+              fi
+              git pull --rebase origin main
+            done
+          fi
+
+      - name: Verify public macOS manifest
+        env:
+          EXPECTED_MANDATORY: ${{ inputs.mandatory }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL="https://raw.githubusercontent.com/$UPDATES_REPO/main/update-manifest-macos.json?ts=$(date +%s)"
+          curl --fail --silent --show-error -H 'Cache-Control: no-cache' "$URL" \
+            -o "$RUNNER_TEMP/public-macos-manifest.json"
+          python3 - "$RUNNER_TEMP/public-macos-manifest.json" "$VERSION" "$MACOS_PKG_SHA256" "$EXPECTED_MANDATORY" <<'PY'
+          import json, pathlib, sys
+          path, version, sha256, mandatory = sys.argv[1:5]
+          data = json.loads(pathlib.Path(path).read_text(encoding='utf-8'))
+          expected = {
+              "version": version,
+              "platform": "darwin",
+              "architectures": ["arm64", "amd64"],
+              "sha256": sha256.lower(),
+              "mandatory": mandatory.lower() == "true",
+          }
+          if data.get("version") != expected["version"]:
+              raise SystemExit(f"manifest version mismatch: {data.get('version')!r}")
+          if data.get("platform") != expected["platform"]:
+              raise SystemExit(f"manifest platform mismatch: {data.get('platform')!r}")
+          if data.get("architectures") != expected["architectures"]:
+              raise SystemExit(f"manifest architectures mismatch: {data.get('architectures')!r}")
+          if data.get("sha256", "").lower() != expected["sha256"]:
+              raise SystemExit("manifest checksum mismatch")
+          if bool(data.get("mandatory")) != expected["mandatory"]:
+              raise SystemExit("manifest mandatory flag mismatch")
+          if not data.get("download_url", "").endswith(f"/LinkVideo.Monitor_macOS_{version}.pkg"):
+              raise SystemExit(f"manifest download URL mismatch: {data.get('download_url')!r}")
+          print(json.dumps(data, ensure_ascii=False, indent=2))
+          PY

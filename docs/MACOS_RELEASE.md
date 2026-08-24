@@ -1,10 +1,10 @@
 # LinkVideo Monitor macOS production release
 
-This document describes the production signing and notarization path for the macOS build. Development CI remains ad-hoc signed; a public release must use Apple Developer ID identities and the notarization service.
+This document describes the production signing, notarization and publishing path for the macOS build. Development CI remains ad-hoc signed; a public release must use Apple Developer ID identities and the notarization service.
 
 ## Required Apple credentials
 
-Install these identities in the signing keychain on the release Mac:
+Install these identities in the signing keychain on a manual release Mac:
 
 - `Developer ID Application` for the app and every nested executable/helper;
 - `Developer ID Installer` for the `.pkg` installer.
@@ -16,7 +16,7 @@ export MACOS_APP_IDENTITY='Developer ID Application: Example Company (TEAMID)'
 export MACOS_INSTALLER_IDENTITY='Developer ID Installer: Example Company (TEAMID)'
 ```
 
-For notarization, the preferred method is a Keychain profile created once on the release Mac:
+For notarization, the preferred manual method is a Keychain profile created once on the release Mac:
 
 ```bash
 xcrun notarytool store-credentials 'linkvideo-notary' \
@@ -35,6 +35,42 @@ CI/release infrastructure may instead provide all three environment variables:
 
 The release script never prints the password.
 
+## GitHub Actions production release
+
+`.github/workflows/macos-production-release.yml` is the production publishing entrypoint. It is manual (`workflow_dispatch`) and intentionally runs only when dispatched from `main`.
+
+Configure these repository variables:
+
+- `MACOS_APP_IDENTITY` — exact `Developer ID Application: ... (TEAMID)` identity;
+- `MACOS_INSTALLER_IDENTITY` — exact `Developer ID Installer: ... (TEAMID)` identity.
+
+Configure these repository secrets:
+
+- `MACOS_APP_CERT_P12_BASE64` — base64-encoded `.p12` containing the Developer ID Application private key and certificate;
+- `MACOS_APP_CERT_PASSWORD` — password of that `.p12`;
+- `MACOS_INSTALLER_CERT_P12_BASE64` — base64-encoded `.p12` containing the Developer ID Installer private key and certificate;
+- `MACOS_INSTALLER_CERT_PASSWORD` — password of that `.p12`;
+- `MACOS_NOTARY_APPLE_ID`;
+- `MACOS_NOTARY_TEAM_ID`;
+- `MACOS_NOTARY_PASSWORD` — Apple app-specific password;
+- `UPDATES_REPO_TOKEN` — token allowed to create releases and push `main` in `WellJons/LinkVideo.Monitor.Updates`.
+
+The workflow creates an ephemeral keychain on the GitHub-hosted macOS runner, imports the two `.p12` files, runs the normal production release script, and deletes the keychain at the end. Certificate files are also removed during cleanup.
+
+Run the workflow from `main` with a version such as `0.1.0` or `0.1.0-beta.1`. The optional `mandatory` input controls only the macOS update-manifest flag; it does not weaken any signature or notarization check.
+
+After all local production checks pass, the workflow:
+
+1. uploads the signed/notarized ZIP, PKG, DMG and checksum list as a workflow artifact;
+2. creates immutable source tag `macos-v<VERSION>` pointing at the exact `main` commit;
+3. publishes the macOS assets into public `WellJons/LinkVideo.Monitor.Updates` release `v<VERSION>`;
+4. refuses to replace an existing public asset with different bytes;
+5. downloads the public PKG again and verifies its SHA-256;
+6. updates `update-manifest-macos.json` only after the public PKG is proven identical;
+7. verifies the public manifest after the push.
+
+The public release tag may also contain Windows assets when platform versions happen to match. Platform-specific filenames and manifests keep the update channels independent.
+
 ## Preflight without credentials
 
 Any macOS build machine can verify that the release toolchain and scripts are available without accessing certificates or Apple credentials:
@@ -43,9 +79,9 @@ Any macOS build machine can verify that the release toolchain and scripts are av
 bash scripts/macos/release-sign-notarize.sh --check
 ```
 
-This is the mode used by normal macOS CI.
+`macOS Release Preflight` also validates the production workflow structure on pull requests, so release automation changes are reviewed by CI before they reach `main`.
 
-## Production release
+## Manual production release
 
 Set a non-development version and run:
 
