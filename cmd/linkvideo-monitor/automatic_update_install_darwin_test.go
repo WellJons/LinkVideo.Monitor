@@ -28,6 +28,7 @@ func TestMacOSUpdateInstallerAppleScriptSyntax(t *testing.T) {
 func TestMacOSPrivilegedInstallRevalidatesRootOwnedCopyBeforeInstall(t *testing.T) {
 	checks := []string{
 		`/bin/cp "$src" "$pkg"`,
+		`/usr/bin/codesign --verify --deep --strict "$app"`,
 		`/usr/sbin/pkgutil --check-signature "$pkg"`,
 		`[ -n "$pkg_team" ] && [ "$pkg_team" = "$app_team" ]`,
 		`/usr/sbin/spctl --assess --type install --verbose=4 "$pkg"`,
