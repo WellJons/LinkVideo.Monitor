@@ -11,6 +11,8 @@ import (
 
 const macOSUpdaterUserAgentPrefix = "LinkVideo-Monitor-macOS-Updater/"
 
+var macOSUpdateBaseTransport = http.DefaultTransport
+
 type macOSUpdateRestrictedTransport struct {
 	base http.RoundTripper
 }
@@ -36,14 +38,17 @@ func (t macOSUpdateRestrictedTransport) RoundTrip(req *http.Request) (*http.Resp
 	}
 	base := t.base
 	if base == nil {
-		base = http.DefaultTransport
+		base = macOSUpdateBaseTransport
+	}
+	if base == nil {
+		return nil, errors.New("HTTP transport недоступен")
 	}
 	return base.RoundTrip(req)
 }
 
 func init() {
-	base := http.DefaultTransport
-	if _, ok := base.(macOSUpdateRestrictedTransport); ok {
+	base := macOSUpdateBaseTransport
+	if _, ok := http.DefaultTransport.(macOSUpdateRestrictedTransport); ok {
 		return
 	}
 	http.DefaultTransport = macOSUpdateRestrictedTransport{base: base}
