@@ -3,7 +3,8 @@ set -u
 
 APP="/Applications/LinkVideo.Monitor.app"
 BIN="$APP/Contents/MacOS/LinkVideo.Monitor"
-RELAUNCH_MARKER="/var/tmp/ru.linkvideo.monitor.relaunch"
+STATE_DIR="/var/db/LinkVideo.Monitor"
+RELAUNCH_MARKER="$STATE_DIR/update-relaunch"
 
 app_processes() {
   /usr/bin/pgrep -f "^${APP}/Contents/" 2>/dev/null || true
@@ -13,7 +14,11 @@ main_processes() {
   /usr/bin/pgrep -f "^${BIN}([[:space:]]|$)" 2>/dev/null || true
 }
 
-# Never inherit a marker from a previous interrupted package installation.
+# Package scripts run as root. Keep update state outside world-writable
+# locations so another local user cannot replace the marker with a symlink.
+/bin/mkdir -p "$STATE_DIR"
+/usr/sbin/chown root:wheel "$STATE_DIR"
+/bin/chmod 700 "$STATE_DIR"
 /bin/rm -f "$RELAUNCH_MARKER"
 
 main_pids="$(main_processes)"
@@ -24,8 +29,7 @@ if [[ -n "$main_pids" ]]; then
     case "$console_uid" in
       ''|*[!0-9]*) ;;
       *)
-        /usr/bin/printf '%s\n%s\n' "$console_user" "$console_uid" > "$RELAUNCH_MARKER"
-        /bin/chmod 600 "$RELAUNCH_MARKER"
+        (umask 077; /usr/bin/printf '%s\n%s\n' "$console_user" "$console_uid" > "$RELAUNCH_MARKER")
         ;;
     esac
   fi
